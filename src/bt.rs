@@ -1,3 +1,29 @@
+#[derive(Debug)]
+pub enum Incomplete {
+    Running,
+    Failed(&'static str),
+}
+
+pub type BTResult<T = ()> = Result<T, Incomplete>;
+
+pub fn condition(c: bool, msg: &'static str) -> BTResult {
+    if c {
+        Ok(())
+    } else {
+        Err(Incomplete::Failed(msg))
+    }
+}
+
+impl Incomplete {
+    pub fn when(self, cond: bool) -> BTResult {
+        if cond {
+            Err(self)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum NodeStatus {
     Initial,

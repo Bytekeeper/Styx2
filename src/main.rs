@@ -1,131 +1,404 @@
-mod bt;
+//
+// mod grid;
+//
 mod build;
+mod cherry_vis;
 mod gathering;
 mod gms;
-mod grid;
-mod reservation;
+mod sbase;
+mod splayer;
+mod sunit;
+mod tracker;
+// mod json;
+// mod reservation;
+mod targeting;
+mod train;
+mod upgrade;
 
-use bt::*;
+use crate::sunit::*;
 use build::*;
+use cherry_vis::*;
 use gathering::*;
 use gms::*;
-use grid::*;
-use reservation::*;
+use rsbwapi::sma::*;
 use rsbwapi::*;
+use sbase::*;
+use splayer::*;
+use std::borrow::Cow;
+use targeting::*;
+use tracker::*;
+use train::*;
+use upgrade::*;
 
-pub struct MyModule {
-    build_pool: Build,
-    build_hatchery: Build,
+#[derive(Debug)]
+pub enum FailureReason {
+    InsufficientResources,
+    Misc(Cow<'static, str>),
 }
 
-pub struct Frame<'a> {
-    game: &'a Game<'a>,
-    available_gms: GMS,
-    my_units: Vec<Unit<'a>>,
-    available_units: Vec<Unit<'a>>,
-    incomplete_units: Vec<Unit<'a>>,
+impl FailureReason {
+    pub fn misc(reason: impl Into<Cow<'static, str>>) -> FailureReason {
+        FailureReason::Misc(reason.into())
+    }
+}
+
+pub struct MyModule {
+    pub game: Game,
+    pub units: Units,
+    pub players: Players,
+    pub tracker: Tracker,
+    pub map: Map,
+}
+
+impl MyModule {
+    pub fn base_near(&self, position: Position) -> Option<SBase> {
+        // TODO
+        None
+    }
+
+    pub fn is_in_narrow_choke(&self, tp: TilePosition) -> bool {
+        // TODO
+        false
+    }
+
+    pub fn is_target_reachable_enemy_base(
+        &self,
+        target_position: Position,
+        vanguard: &SUnit,
+    ) -> bool {
+        // TODO
+        false
+    }
+    pub fn ensure_free_supply(&mut self, amount: i32) {
+        let supply_delta = self.get_pending_supply();
+        if supply_delta < amount {
+            self.start_train(TrainParam::train(UnitType::Zerg_Overlord));
+        }
+    }
+
+    pub fn get_pending_supply(&mut self) -> i32 {
+        self.units
+            .mine_all
+            .iter()
+            .map(|u| {
+                let t = u.future_type();
+                t.supply_provided() - t.supply_required()
+            })
+            .sum()
+    }
+
+    pub fn has_pending_or_upgraded(&self, upgrade: UpgradeType, level: i32) -> bool {
+        let self_ = self.game.self_().unwrap();
+        self_.get_upgrade_level(upgrade)
+            == level
+                - if self_.is_upgrading(upgrade) { 1 } else { 0 }
+                - self
+                    .tracker
+                    .unrealized
+                    .iter()
+                    .filter(|u| matches!(u, UnrealizedItem::Upgrade(_, ut) if ut == &upgrade))
+                    .count() as i32
+    }
+
+    pub fn has_pending_or_ready(&self, check: impl Fn(UnitType) -> bool) -> bool {
+        self.units
+            .mine_all
+            .iter()
+            .any(|u| check(u.build_type()) || check(u.get_type()))
+            || self
+                .tracker
+                .unrealized
+                .iter()
+                .any(|u| matches!(u, UnrealizedItem::UnitType(_, ut) if check(*ut)))
+    }
+
+    pub fn count_pending_or_ready(&self, check: impl Fn(UnitType) -> bool) -> usize {
+        self.units
+            .mine_all
+            .iter()
+            .filter(|u| check(u.build_type()) || check(u.get_type()))
+            .count()
+            + self
+                .tracker
+                .unrealized
+                .iter()
+                .filter(|u| matches!(u, UnrealizedItem::UnitType(_, ut) if check(*ut)))
+                .count()
+    }
+
+    fn opening_styx(&mut self) -> anyhow::Result<()> {
+        if !self.has_pending_or_ready(|ut| ut == UnitType::Zerg_Extractor) {
+            self.ensure_unit_count(UnitType::Zerg_Drone, 9);
+        }
+        self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
+        self.ensure_unit_count(UnitType::Zerg_Overlord, 2);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 3);
+        self.ensure_building_count(UnitType::Zerg_Hatchery, 2);
+        self.ensure_building_count(UnitType::Zerg_Extractor, 1);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 7);
+        self.ensure_upgrade(UpgradeType::Metabolic_Boost, 1);
+        self.ensure_free_supply(UnitType::Zerg_Zergling.supply_required());
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 50);
+        self.ensure_gathering_gas(GatherParams {
+            required_resources: -self.tracker.available_gms.gas,
+            ..Default::default()
+        });
+
+        if self
+            .units
+            .mine_all
+            .iter()
+            .filter(|u| u.get_type() == UnitType::Zerg_Zergling)
+            .count()
+            >= 4
+        {
+            let target = self
+                .units
+                .enemy
+                .iter()
+                .find(|u| u.get_type().is_building())
+                .map(|u| u.position())
+                .unwrap_or_else(|| {
+                    self.game
+                        .get_start_locations()
+                        .iter()
+                        .max_by_key(|l| !self.game.is_explored(**l))
+                        .map(|l| l.to_position())
+                        .unwrap()
+                });
+            let attackers: Vec<_> = self
+                .units
+                .my_completed
+                .iter()
+                .filter(|u| {
+                    u.get_type().can_attack()
+                        && u.get_type().can_move()
+                        && !u.get_type().is_worker()
+                })
+                .collect();
+            let uc = UnitCluster {
+                vanguard: attackers.first().unwrap(),
+                units: &attackers,
+                vanguard_dist_to_target: 700,
+            };
+            let solution =
+                self.select_targets(uc, self.units.enemy.iter().collect(), target, false);
+            for (u, t) in solution {
+                if let Some(target) = &t {
+                    CVIS.lock().unwrap().draw_unit_pos_line(
+                        &u,
+                        target.position().x,
+                        target.position().y,
+                        Color::Red,
+                    );
+                    CVIS.lock().unwrap().draw_line(
+                        u.position().x,
+                        u.position().y,
+                        target.position().x,
+                        target.position().y,
+                        Color::White,
+                    );
+                    assert!(u.exists());
+
+                    if let Err(e) = u.attack(target) {
+                        CVIS.lock().unwrap().draw_text(
+                            u.position().x,
+                            u.position().y,
+                            format!("Attack failed: {:?}", e),
+                        );
+                        u.stop();
+                    }
+                } else if !u.attacking() {
+                    CVIS.lock().unwrap().draw_line(
+                        u.position().x,
+                        u.position().y,
+                        target.x,
+                        target.y,
+                        Color::Black,
+                    );
+                    u.attack_position(target);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn opening_10hatch(&mut self) -> anyhow::Result<()> {
+        let supply = self.game.self_().unwrap().supply_used() / 2;
+        self.ensure_unit_count(UnitType::Zerg_Drone, 9);
+        self.do_extractor_trick();
+
+        unimplemented!();
+        Ok(())
+    }
+
+    fn opening_9poolspire(&mut self) -> anyhow::Result<()> {
+        self.ensure_unit_count(UnitType::Zerg_Drone, 9);
+        self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
+        self.ensure_building_count(UnitType::Zerg_Extractor, 1);
+        self.ensure_unit_count(UnitType::Zerg_Overlord, 2);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 3);
+        self.ensure_upgrade(UpgradeType::Metabolic_Boost, 1);
+        self.ensure_building_count(UnitType::Zerg_Lair, 1);
+        self.ensure_unit_count(UnitType::Zerg_Drone, 17);
+        self.ensure_unit_count(UnitType::Zerg_Overlord, 3);
+        self.ensure_building_count(UnitType::Zerg_Spire, 1);
+
+        self.ensure_gathering_gas(GatherParams {
+            max_workers: 3,
+            ..Default::default()
+        });
+        Ok(())
+    }
+
+    pub fn estimate_frames_to(&self, unit: &SUnit, target: Position) -> u32 {
+        assert!(
+            unit.get_type().top_speed() > 0.0,
+            "No! A {:?} really is very very slow!",
+            unit.get_type()
+        );
+        ((
+            if unit.flying() {
+                unit.position().distance(target)
+            } else {
+                self.map
+                    .get_path(
+                        unit.position().to_walk_position(),
+                        target.to_walk_position(),
+                    )
+                    .1 as f64
+            } + 48.0
+            // Some small buffer for acceleration/deceleration and obstacle avoidance
+        ) / unit.get_type().top_speed()) as u32
+    }
 }
 
 trait SupplyCounter {
     fn get_provided_supply(&self) -> i32;
 }
 
-impl SupplyCounter for Vec<Unit<'_>> {
+impl SupplyCounter for &[Unit] {
     fn get_provided_supply(&self) -> i32 {
-        self.iter().fold(0, |acc, u| {
-            acc + u.get_type().supply_provided() + u.get_build_type().supply_provided()
-        })
+        self.iter()
+            .fold(0, |acc, u| acc + u.get_build_type().supply_provided())
     }
 }
 
 impl AiModule for MyModule {
-    fn on_start(&mut self, game: &Game) {}
+    fn on_start(&mut self, game: &Game) {
+        *CVIS.lock().unwrap() = cherry_vis::implementation::CherryVis::new(game);
+        self.map = Map::new(game);
+        println!(
+            "{} {}",
+            game.get_latency_frames(),
+            game.get_remaining_latency_frames()
+        );
+    }
 
-    fn on_unit_create(&mut self, _game: &Game, unit: Unit) {}
+    fn on_end(&mut self, game: &Game, _winner: bool) {
+        #[cfg(cvis)]
+        {
+            std::fs::create_dir_all("bwapi-data/write/cvis");
+            let encoder = serde_json::to_writer(
+                zstd::stream::write::Encoder::new(
+                    std::fs::File::create("bwapi-data/write/cvis/trace.json").unwrap(),
+                    0,
+                )
+                .unwrap()
+                .auto_finish(),
+                &*CVIS.lock().unwrap(),
+            );
+        }
+        // println!(
+        //     "{:?}",
+        //     std::path::Path::new("bwapi-data/write").canonicalize()
+        // );
+        // let mut file = std::fs::File::create("bwapi-data/write/out.txt").unwrap();
+        // let mut encoder = zstd::stream::write::Encoder::new(file, 0).unwrap();
+        // let mut out = json::JsonStream::new(&mut encoder);
+        // let mut obj = out.start_object().unwrap();
+        // let mut fld = obj.start_field("_version").unwrap();
+        // fld.value(0);
+        // let mut fld = obj.start_field("type_names").unwrap();
+        // let mut types = fld.start_object().unwrap();
+        // types.end();
+        // fld.end();
+        // obj.end();
+        // // out.write_object_start();
+        // // out.write_object_field("_version");
+        // // out.write_val(0);
+        // // out.write_more();
+        // // out.write_object_field("types_names");
+        // // out.write_object_end();
+        // encoder.finish().unwrap();
+        println!(
+            "Times in microseconds:\n{}",
+            serde_yaml::to_string(game.get_metrics()).unwrap()
+        );
+    }
 
-    fn on_unit_destroy(&mut self, _game: &Game, unit: Unit) {}
+    fn on_unit_destroy(&mut self, _game: &Game, unit: Unit) {
+        // self.units.remove_unit(unit);
+    }
 
     fn on_frame(&mut self, game: &Game) {
-        if game.get_frame_count() % 2 != 0 {
-            return;
-        }
-        let self_ = game.self_().unwrap();
-        let units = game.get_all_units();
-        let my_units = self_.get_units();
-        let mut frame = Frame {
-            game,
-            available_gms: GMS {
-                minerals: self_.minerals(),
-                gas: self_.gas(),
-                supply: self_.supply_total() - self_.supply_used(),
-            },
-            my_units: my_units.clone(),
-            available_units: my_units.clone(),
-            incomplete_units: my_units
+        CVIS.lock().unwrap().set_frame(game.get_frame_count());
+        // self.cvis.draw_text(20, 20, "test".to_owned());
+        // self.cvis
+        // .draw_text_screen(100, 100, "This is a test".to_owned());
+        // println!("{:?}", game.get_all_units());
+        // if game.get_frame_count() > 3 {
+        //     game.leave_game();
+        // }
+        (move || -> anyhow::Result<()> {
+            let me = self.game.self_().unwrap();
+            self.players.update(&self.game);
+            self.units.update(&self.game, &self.players);
+            self.tracker.unrealized.clear();
+            self.tracker.available_units = self
+                .units
+                .my_completed
                 .iter()
-                .filter(|u| !u.is_completed())
+                .filter(|u| u.build_type() == UnitType::None && !u.training())
                 .cloned()
-                .collect(),
-        };
-
-        let self_ = game.self_().unwrap();
-        if self_.supply_used() + 12
-            > self_.supply_total() + frame.incomplete_units.get_provided_supply()
-        {
-            if let Some(larva) = my_units
+                .collect();
+            self.tracker.available_gms = Gms {
+                minerals: me.minerals(),
+                gas: me.gas(),
+                supply: me.supply_total() - me.supply_used(),
+            };
+            self.tracker.available_gms -= self
+                .units
+                .my_completed
                 .iter()
-                .find(|u| u.get_type() == UnitType::Zerg_Larva)
-            {
-                larva.train(UnitType::Zerg_Overlord).ok();
-            }
-        } else if let Some(u) = units.iter().find(|u| u.get_type() == UnitType::Zerg_Larva) {
-            if game
-                .can_make(None, UnitType::Zerg_Zergling)
-                .unwrap_or(false)
-            {
-                u.train(UnitType::Zerg_Zergling).ok();
-            } else {
-                u.train(UnitType::Zerg_Drone).ok();
-            }
-        }
-        self.build_pool.start_build(&mut frame);
-        let result = self.build_hatchery.start_build(&mut frame);
-        if result == NodeStatus::Success {
-            self.build_hatchery = Build::new(UnitType::Zerg_Hatchery);
-        }
-        Gathering.go(&frame);
-        frame.available_units.retain(|u| {
-            if !u.get_type().can_attack() || u.get_type().is_worker() {
-                true
-            } else {
-                u.get_closest_unit(
-                    |e: &Unit| {
-                        e.get_player() == game.enemy().unwrap()
-                            && u.can_attack_unit((e, true, true, true)).unwrap_or(false)
-                    },
-                    None,
-                )
-                .map(|e| {
-                    u.attack(&e).ok();
-                    false
-                })
-                .unwrap_or(true)
-            }
-        });
+                // Zerg: Workers morph to building and type and build_type will stay the same
+                .filter(|u| u.build_type() != u.get_type() && u.build_type().is_building())
+                .map(|u| u.build_type().price())
+                .sum();
+            //     let self_ = game.self_().unwrap();
 
-        //        game.cmd().leave_game();
-    }
-}
-
-impl MyModule {
-    fn type_name<T>(v: &T) -> &'static str {
-        std::any::type_name::<T>()
+            // self.opening_13_pool_muta();
+            self.opening_styx();
+            // self.opening_10hatch();
+            // self.opening_9poolspire();
+            self.ensure_gathering_minerals();
+            Ok(())
+        })()
+        .unwrap();
     }
 }
 
 fn main() {
-    rsbwapi::start(MyModule {
-        build_pool: Build::new(UnitType::Zerg_Spawning_Pool),
-        build_hatchery: Build::new(UnitType::Zerg_Hatchery),
+    std::env::set_var("RUST_BACKTRACE", "1");
+    rsbwapi::start(|game| MyModule {
+        game: game.clone(),
+        units: Default::default(),
+        players: Default::default(),
+        tracker: Tracker::default(),
+        map: Map::default(),
+        // game_count: 0,
+        // units: Units::new(&game),
+        // grids: Grids::new(),
     });
 }
