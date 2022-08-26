@@ -19,6 +19,9 @@ jobs:
       run: rustup target add i686-pc-windows-msvc
     - uses: actions/checkout@v3
     - name: Build
-      run: cargo build --verbose --target i686-pc-windows-msvc
+      run: cargo build --verbose --target i686-pc-windows-msvc --release
+    - uses: actions/upload-artifact@v3
+      with:
+        path: target/i686-pc-windows-msvc/release/styx_z.exe
     - name: Run tests
       run: cargo test --verbose --target i686-pc-windows-msvc
