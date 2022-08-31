@@ -222,7 +222,7 @@ impl MyModule {
         let target_is_reachable_enemy_base = !static_position
             && self.is_target_reachable_enemy_base(target_position, cluster.vanguard);
 
-        let mut targets: Vec<Target> = target_units
+        let targets: Vec<Target> = target_units
             .iter()
             .filter(|u| u.exists())
             .map(|target_unit| Target::new(self, target_unit, cluster.vanguard))
@@ -267,7 +267,7 @@ impl MyModule {
                     || target.unit.get_type() == UnitType::Zerg_Egg
                     || !unit.detected()
                     || unit.hit_points() <= 0
-                    || unit.can_attack(target.unit)
+                    || !unit.can_attack(target.unit)
                 {
                     CVIS.lock()
                         .unwrap()

@@ -1,30 +1,35 @@
 //
 // mod grid;
 //
+mod boids;
 mod build;
 mod cherry_vis;
+mod combat_sim;
 mod gathering;
 mod gms;
+mod micro;
 mod sbase;
+mod scouting;
 mod splayer;
+mod squad;
 mod sunit;
-mod tracker;
-// mod json;
-// mod reservation;
 mod targeting;
+mod tracker;
 mod train;
 mod upgrade;
 
-use crate::sunit::*;
 use build::*;
 use cherry_vis::*;
 use gathering::*;
 use gms::*;
 use rsbwapi::sma::*;
-use rsbwapi::*;
+pub use rsbwapi::*;
 use sbase::*;
+use scouting::*;
 use splayer::*;
+use squad::*;
 use std::borrow::Cow;
+pub use sunit::*;
 use targeting::*;
 use tracker::*;
 use train::*;
@@ -33,6 +38,7 @@ use upgrade::*;
 #[derive(Debug)]
 pub enum FailureReason {
     InsufficientResources,
+    Bwapi(Error),
     Misc(Cow<'static, str>),
 }
 
@@ -127,9 +133,11 @@ impl MyModule {
     }
 
     fn opening_styx(&mut self) -> anyhow::Result<()> {
-        if !self.has_pending_or_ready(|ut| ut == UnitType::Zerg_Extractor) {
+        if self.count_pending_or_ready(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) < 2 {
             self.ensure_unit_count(UnitType::Zerg_Drone, 9);
         }
+        // Usually, if we lost a drone its game over anyways
+        self.ensure_unit_count(UnitType::Zerg_Drone, 7);
         self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
         self.ensure_unit_count(UnitType::Zerg_Overlord, 2);
         self.ensure_unit_count(UnitType::Zerg_Zergling, 3);
@@ -137,35 +145,52 @@ impl MyModule {
         self.ensure_building_count(UnitType::Zerg_Extractor, 1);
         self.ensure_unit_count(UnitType::Zerg_Zergling, 7);
         self.ensure_upgrade(UpgradeType::Metabolic_Boost, 1);
-        self.ensure_free_supply(UnitType::Zerg_Zergling.supply_required());
+        self.ensure_free_supply(2);
         self.ensure_unit_count(UnitType::Zerg_Zergling, 50);
         self.ensure_gathering_gas(GatherParams {
             required_resources: -self.tracker.available_gms.gas,
             ..Default::default()
         });
 
-        if self
+        if !self
             .units
-            .mine_all
+            .enemy
             .iter()
-            .filter(|u| u.get_type() == UnitType::Zerg_Zergling)
-            .count()
-            >= 4
+            .any(|e| e.alive() && e.get_type().is_building())
         {
+            self.scout(ScoutParams::default());
+            let target = self.units.enemy.iter().map(|u| u.position()).next();
+            if let Some(target) = target {
+                let attackers: Vec<_> = self
+                    .tracker
+                    .available_units
+                    .iter()
+                    .filter(|u| {
+                        u.get_type().can_attack()
+                            && u.get_type().can_move()
+                            && !u.get_type().is_worker()
+                    })
+                    .cloned()
+                    .collect();
+                if !attackers.is_empty() {
+                    self.tracker
+                        .available_units
+                        .retain(|it| !attackers.contains(it));
+                    Squad {
+                        target,
+                        units: attackers,
+                    }
+                    .update(self);
+                }
+            }
+        } else {
             let target = self
                 .units
                 .enemy
                 .iter()
                 .find(|u| u.get_type().is_building())
                 .map(|u| u.position())
-                .unwrap_or_else(|| {
-                    self.game
-                        .get_start_locations()
-                        .iter()
-                        .max_by_key(|l| !self.game.is_explored(**l))
-                        .map(|l| l.to_position())
-                        .unwrap()
-                });
+                .unwrap();
             let attackers: Vec<_> = self
                 .units
                 .my_completed
@@ -175,49 +200,14 @@ impl MyModule {
                         && u.get_type().can_move()
                         && !u.get_type().is_worker()
                 })
+                .cloned()
                 .collect();
-            let uc = UnitCluster {
-                vanguard: attackers.first().unwrap(),
-                units: &attackers,
-                vanguard_dist_to_target: 700,
-            };
-            let solution =
-                self.select_targets(uc, self.units.enemy.iter().collect(), target, false);
-            for (u, t) in solution {
-                if let Some(target) = &t {
-                    CVIS.lock().unwrap().draw_unit_pos_line(
-                        &u,
-                        target.position().x,
-                        target.position().y,
-                        Color::Red,
-                    );
-                    CVIS.lock().unwrap().draw_line(
-                        u.position().x,
-                        u.position().y,
-                        target.position().x,
-                        target.position().y,
-                        Color::White,
-                    );
-                    assert!(u.exists());
-
-                    if let Err(e) = u.attack(target) {
-                        CVIS.lock().unwrap().draw_text(
-                            u.position().x,
-                            u.position().y,
-                            format!("Attack failed: {:?}", e),
-                        );
-                        u.stop();
-                    }
-                } else if !u.attacking() {
-                    CVIS.lock().unwrap().draw_line(
-                        u.position().x,
-                        u.position().y,
-                        target.x,
-                        target.y,
-                        Color::Black,
-                    );
-                    u.attack_position(target);
+            if !attackers.is_empty() {
+                Squad {
+                    target,
+                    units: attackers,
                 }
+                .update(self);
             }
         }
 
@@ -271,6 +261,7 @@ impl MyModule {
             } + 48.0
             // Some small buffer for acceleration/deceleration and obstacle avoidance
         ) / unit.get_type().top_speed()) as u32
+            + 24
     }
 }
 
@@ -297,7 +288,7 @@ impl AiModule for MyModule {
     }
 
     fn on_end(&mut self, game: &Game, _winner: bool) {
-        #[cfg(cvis)]
+        #[cfg(feature = "cvis")]
         {
             std::fs::create_dir_all("bwapi-data/write/cvis");
             let encoder = serde_json::to_writer(
@@ -377,12 +368,26 @@ impl AiModule for MyModule {
                 .map(|u| u.build_type().price())
                 .sum();
             //     let self_ = game.self_().unwrap();
+            //
+
+            // Unstick
+            for u in &self.units.my_completed {
+                u.unstick();
+            }
 
             // self.opening_13_pool_muta();
             self.opening_styx();
             // self.opening_10hatch();
             // self.opening_9poolspire();
             self.ensure_gathering_minerals();
+            // dbg!("CP: {}", self.map.choke_points.len());
+            // for cp in &self.map.choke_points {
+            //     dbg!("CP-wps: {}", cp.walk_positions.len());
+            //     for wp in &cp.walk_positions {
+            //         let p = wp.to_position();
+            //         CVIS.lock().unwrap().draw_circle(p.x, p.y, 4, Color::Yellow);
+            //     }
+            // }
             Ok(())
         })()
         .unwrap();
@@ -396,7 +401,7 @@ fn main() {
         units: Default::default(),
         players: Default::default(),
         tracker: Tracker::default(),
-        map: Map::default(),
+        map: Map::new(game),
         // game_count: 0,
         // units: Units::new(&game),
         // grids: Grids::new(),

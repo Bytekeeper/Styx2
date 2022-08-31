@@ -37,7 +37,7 @@ impl MyModule {
             .filter(|it| it.gathering_minerals())
             .count() as u32)
             .saturating_sub(sub_workers)
-            * 44
+            * 47
             * frames
             / 1000
     }
@@ -73,8 +73,11 @@ impl MyModule {
                 .cloned()
                 .filter(|u| u.get_type().is_worker())
                 .collect();
-            gas_workers
-                .sort_by_key(|w| (!w.gathering_gas() as i32) * 1000 + w.distance_to(refinery));
+            gas_workers.sort_by_key(|w| {
+                (!w.gathering_gas() as i32) * 1000
+                    + w.distance_to(refinery)
+                    + (w.carrying_minerals() as i32) * 300
+            });
             let gas_workers: Vec<_> = gas_workers
                 .iter()
                 .take(remaining_required.clamp(0, 4.min(remaining_workers)))

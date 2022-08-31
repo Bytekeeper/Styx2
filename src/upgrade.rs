@@ -1,9 +1,15 @@
 use crate::*;
 
 impl MyModule {
-    pub fn ensure_upgrade(&mut self, upgrade: UpgradeType, level: i32) {
+    pub fn ensure_upgrade(
+        &mut self,
+        upgrade: UpgradeType,
+        level: i32,
+    ) -> Result<(), FailureReason> {
         if self.game.self_().unwrap().get_upgrade_level(upgrade) < level {
-            self.start_upgrade(upgrade);
+            self.start_upgrade(upgrade)
+        } else {
+            Ok(())
         }
     }
 
@@ -36,7 +42,7 @@ impl MyModule {
             .next()
             .ok_or(FailureReason::misc("No upgrader found"))?;
         self.tracker.reserve_unit(&researcher);
-        researcher.upgrade(upgrade);
+        researcher.upgrade(upgrade).map_err(FailureReason::Bwapi)?;
         Ok(())
     }
 }

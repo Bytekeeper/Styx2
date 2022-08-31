@@ -44,7 +44,7 @@ impl MyModule {
             {
                 incomplete_refinery
                     .cancel_morph()
-                    .map_err(|e| FailureReason::misc(format!("{e:?}")));
+                    .map_err(|e| FailureReason::Bwapi(e));
             }
             // Done
         } else if !self
@@ -244,17 +244,21 @@ impl MyModule {
                 })
                 .flatten()
                 .filter(|(b, p)| {
-                    !self.units.all().iter().any(|it| {
-                        it.get_type().is_building()
-                            && Rectangle::new(
-                                it.tile_position(),
-                                it.tile_position() + it.get_type().tile_size(),
-                            )
-                            .intersects(
-                                Rectangle::new(*p, *p + param.unit_type.tile_size()).extrude(1),
-                            )
-                    }) && self
-                        .game
+                    // !self.units.all().iter().any(|it| {
+                    //     let planned_place = Rectangle::new(*p, *p + param.unit_type.tile_size());
+                    //     match it.get_type() {
+                    //         UnitType::Zerg_Extractor | UnitType::Resource_Vespene_Geyser => {
+                    //             Rectangle::new(
+                    //                 it.tile_position(),
+                    //                 it.tile_position() + it.get_type().tile_size(),
+                    //             )
+                    //             .extrude(1)
+                    //             .intersects(planned_place)
+                    //         }
+                    //         _ => false,
+                    //     }
+                    // }) &&
+                    self.game
                         .can_build_here(&b.unit, *p, param.unit_type, false)
                         .unwrap_or(false)
                 })
@@ -266,21 +270,49 @@ impl MyModule {
             param.unit_type.dimension_up() + param.unit_type.dimension_down() + 1,
         );
 
-        let build_pos = build_tile_pos.to_position() + dim / 2;
+        let build_pos =
+            build_tile_pos.to_position() + param.unit_type.tile_size().to_position() / 2;
         let frames_to_start_build = self.estimate_frames_to(&builder, build_pos);
         let future_gms = available_gms + self.estimate_gms(frames_to_start_build, 1);
-        CVIS.lock().unwrap().log_unit_frame(
-            &builder,
-            format!(
-                "BUILD: frames to start: {}, available gms {:?}, future gms: {:?}, ordering: {}",
-                frames_to_start_build, available_gms, future_gms, order_build
-            ),
-        );
+        // CVIS.lock().unwrap().log_unit_frame(
+        //     &builder,
+        //     format!(
+        //         "BUILD: frames to start: {}, available gms {:?}, future gms: {:?}, ordering: {}",
+        //         frames_to_start_build, available_gms, future_gms, order_build
+        //     ),
+        // );
         if !order_build && !(future_gms >= param.unit_type.price()) {
+            CVIS.lock().unwrap().draw_rect(
+                build_pos.x - param.unit_type.dimension_left(),
+                build_pos.y - param.unit_type.dimension_up(),
+                build_pos.x + param.unit_type.dimension_right(),
+                build_pos.y + param.unit_type.dimension_down(),
+                Color::Red,
+            );
+            CVIS.lock().unwrap().draw_text(
+                build_pos.x,
+                build_pos.y,
+                format!(
+                    "Frames: {}, GMS: {},{}",
+                    frames_to_start_build, future_gms.minerals, future_gms.gas
+                ),
+            );
             return Err(FailureReason::InsufficientResources);
         }
         self.tracker.reserve_unit(builder);
         if !order_build || builder.position().distance_squared(build_pos) > 128 * 128 {
+            CVIS.lock().unwrap().draw_rect(
+                build_pos.x - param.unit_type.dimension_left(),
+                build_pos.y - param.unit_type.dimension_up(),
+                build_pos.x + param.unit_type.dimension_right(),
+                build_pos.y + param.unit_type.dimension_down(),
+                Color::Grey,
+            );
+            CVIS.lock().unwrap().draw_text(
+                build_pos.x,
+                build_pos.y,
+                format!("Frames: {}", frames_to_start_build),
+            );
             if builder
                 .target_position()
                 .map(|tp| tp.distance_squared(build_pos) > 32 * 32)
@@ -289,10 +321,16 @@ impl MyModule {
                 builder.move_to(build_pos).ok();
             }
         } else {
-            let res = builder.build(param.unit_type, build_tile_pos);
-            CVIS.lock()
-                .unwrap()
-                .log_unit_frame(&builder, format!("build() = {:?}", res));
+            CVIS.lock().unwrap().draw_rect(
+                build_pos.x - param.unit_type.dimension_left(),
+                build_pos.y - param.unit_type.dimension_up(),
+                build_pos.x + param.unit_type.dimension_right(),
+                build_pos.y + param.unit_type.dimension_down(),
+                Color::Green,
+            );
+            builder
+                .build(param.unit_type, build_tile_pos)
+                .map_err(FailureReason::Bwapi)?;
         }
         Ok(())
     }

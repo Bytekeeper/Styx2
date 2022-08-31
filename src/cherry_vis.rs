@@ -17,12 +17,13 @@ pub trait CherryVisOutput {
     fn draw_text_screen(&mut self, x: i32, y: i32, text: String) {}
     fn draw_unit_pos_line(&mut self, unit: &SUnit, x: i32, y: i32, color: Color) {}
     fn draw_line(&mut self, ax: i32, ay: i32, bx: i32, by: i32, color: Color) {}
+    fn draw_rect(&mut self, ax: i32, ay: i32, bx: i32, by: i32, color: Color) {}
     fn draw_circle(&mut self, x: i32, y: i32, radius: i32, color: Color) {}
     fn log_unit_frame(&mut self, unit: &SUnit, message: String) {}
     fn log(&mut self, message: String) {}
 }
 
-#[cfg(not(cvis))]
+#[cfg(not(feature = "cvis"))]
 pub mod implementation {
     use super::*;
 
@@ -36,7 +37,7 @@ pub mod implementation {
     }
 }
 
-#[cfg(cvis)]
+#[cfg(feature = "cvis")]
 pub mod implementation {
     use super::*;
     use num_traits::cast::{FromPrimitive, ToPrimitive};
@@ -177,6 +178,13 @@ pub mod implementation {
                 });
         }
 
+        fn draw_rect(&mut self, ax: i32, ay: i32, bx: i32, by: i32, color: Color) {
+            self.draw_line(ax, ay, bx, ay, color);
+            self.draw_line(bx, ay, bx, by, color);
+            self.draw_line(bx, by, ax, by, color);
+            self.draw_line(ax, by, ax, ay, color);
+        }
+
         fn draw_circle(&mut self, x: i32, y: i32, radius: i32, color: Color) {
             self.draw_commands
                 .entry(self.frame)
@@ -192,6 +200,7 @@ pub mod implementation {
         #[track_caller]
         fn log_unit_frame(&mut self, unit: &SUnit, message: String) {
             let loc = Location::caller();
+            #[cfg(not(feature = "cvis_targeting"))]
             if loc.file().ends_with("targeting.rs") {
                 return;
             }
@@ -200,7 +209,7 @@ pub mod implementation {
                 .or_insert_with(|| vec![])
                 .push(LogEntry {
                     frame: self.frame,
-                    message,
+                    message: format!("{}:{} : {}", loc.line(), loc.file(), message),
                     line: loc.line() as i32,
                     file: loc.file().to_owned(),
                 });
@@ -209,12 +218,13 @@ pub mod implementation {
         #[track_caller]
         fn log(&mut self, message: String) {
             let loc = Location::caller();
+            #[cfg(not(feature = "cvis_targeting"))]
             if loc.file().ends_with("targeting.rs") {
                 return;
             }
             self.logs.push(LogEntry {
                 frame: self.frame,
-                message,
+                message: format!("{}:{} : {}", loc.line(), loc.file(), message),
                 line: loc.line() as i32,
                 file: loc.file().to_owned(),
             });

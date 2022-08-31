@@ -50,8 +50,20 @@ impl Units {
                 .clone();
 
             let old = unit.inner.replace(UnitInfo::new(game, &unit.unit));
+            let mut inner = unit.inner.borrow_mut();
             if old.pending_goal.valid_until >= game.get_frame_count() {
-                unit.inner.borrow_mut().pending_goal = old.pending_goal;
+                inner.pending_goal = old.pending_goal;
+            }
+            if !inner.is_moving
+                && inner
+                    .order_target_position
+                    // TODO: This seems not to work...
+                    .map(|p| p.distance_squared(inner.position) > 64 * 64)
+                    .unwrap_or(false)
+            {
+                inner.stuck_frames = old.stuck_frames + 1;
+            } else {
+                inner.stuck_frames = 0;
             }
         }
         for u in self.all.values() {
@@ -72,7 +84,7 @@ impl Units {
         self.enemy = self
             .all
             .values()
-            .filter(|it| it.exists() && it.player().is_enemy())
+            .filter(|it| it.player().is_enemy())
             .cloned()
             .collect();
         self.minerals = self
@@ -84,7 +96,7 @@ impl Units {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum PendingGoal {
     Nothing,
     Build(UnitType),
@@ -140,6 +152,17 @@ impl SUnit {
         self.inner.borrow().type_
     }
 
+    pub fn unstick(&self) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.stuck_frames < 12 {
+            return;
+        }
+        dbg!("Unsticking", self.unit.get_id());
+        inner.stuck_frames = 0;
+        drop(inner);
+        self.stop();
+    }
+
     pub fn idle(&self) -> bool {
         let inner = self.inner.borrow();
         match inner.pending_goal.goal {
@@ -153,6 +176,10 @@ impl SUnit {
             | PendingGoal::GatherGas(_) => false,
             PendingGoal::MoveTo(_) | PendingGoal::Nothing => inner.idle,
         }
+    }
+
+    pub fn alive(&self) -> bool {
+        self.inner.borrow().alive
     }
 
     pub fn completed(&self) -> bool {
@@ -176,7 +203,8 @@ impl SUnit {
     }
 
     pub fn carrying(&self) -> bool {
-        self.inner.borrow().carrying
+        let inner = self.inner.borrow();
+        inner.carrying_gas || inner.carrying_minerals
     }
 
     pub fn exists(&self) -> bool {
@@ -236,7 +264,7 @@ impl SUnit {
     }
 
     pub fn targetable(&self) -> bool {
-        self.exists() && self.detected() && self.stasised()
+        self.exists() && self.detected() && !self.stasised()
     }
 
     pub fn can_attack(&self, other: &SUnit) -> bool {
@@ -353,17 +381,7 @@ impl SUnit {
 
     pub fn upgrade(&self, ut: UpgradeType) -> BwResult<bool> {
         let mut inner = self.inner.borrow_mut();
-        if inner.sleeping() {
-            return Ok(false);
-        }
-        let result = self.unit.upgrade(ut)?;
-        if result {
-            inner.pending_goal = Pending {
-                valid_until: inner.last_seen + 3,
-                goal: PendingGoal::Upgrade(ut),
-            };
-        }
-        Ok(result)
+        inner.act(|_| self.unit.upgrade(ut), PendingGoal::Upgrade(ut), 3)
     }
 
     pub fn cancel_morph(&self) -> BwResult<bool> {
@@ -393,24 +411,27 @@ impl SUnit {
         self.unit.stop()
     }
 
-    pub fn gather(&self, o: impl borrow::Borrow<SUnit>) -> BwResult<bool> {
+    pub fn sleeping(&self) -> bool {
+        !matches!(self.inner.borrow().pending_goal.goal, PendingGoal::Nothing)
+    }
+
+    pub fn gather(&self, o: &SUnit) -> BwResult<bool> {
         let mut inner = self.inner.borrow_mut();
-        if inner.sleeping() {
-            return Ok(false);
-        }
-        let other = o.borrow();
-        let result = self.unit.gather(&other.unit)?;
-        if result {
-            inner.pending_goal = Pending {
-                valid_until: inner.last_seen + 3,
-                goal: if other.get_type().is_mineral_field() {
-                    PendingGoal::GatherMinerals(other.clone())
+        inner.act(
+            |inner| {
+                if inner.order_target.unwrap() == Some(o) {
+                    Ok(true)
                 } else {
-                    PendingGoal::GatherGas(other.clone())
-                },
-            };
-        }
-        Ok(result)
+                    self.unit.gather(&o.unit)
+                }
+            },
+            if o.get_type().is_mineral_field() {
+                PendingGoal::GatherMinerals(o.clone())
+            } else {
+                PendingGoal::GatherGas(o.clone())
+            },
+            3,
+        )
     }
 
     pub fn gathering(&self) -> bool {
@@ -429,6 +450,11 @@ impl SUnit {
             || self.inner.borrow().gathering_gas
     }
 
+    pub fn carrying_minerals(&self) -> bool {
+        let inner = self.inner.borrow();
+        inner.carrying_minerals
+    }
+
     pub fn get_order(&self) -> Order {
         self.inner.borrow().order
     }
@@ -439,57 +465,47 @@ impl SUnit {
 
     pub fn train(&self, t: UnitType) -> BwResult<bool> {
         let mut inner = self.inner.borrow_mut();
-        if inner.sleeping() {
-            return Ok(false);
-        }
-        let result = inner.build_type() == t || self.unit.train(t)?;
-        if result {
-            inner.pending_goal = Pending {
-                valid_until: inner.last_seen + 3,
-                goal: PendingGoal::Train(t),
-            };
-        }
-        Ok(result)
+        inner.act(
+            |inner| {
+                if inner.build_type() == t {
+                    Ok(true)
+                } else {
+                    self.unit.train(t)
+                }
+            },
+            PendingGoal::Train(t),
+            3,
+        )
     }
 
     pub fn build(&self, t: UnitType, pos: TilePosition) -> BwResult<bool> {
         let mut inner = self.inner.borrow_mut();
-        if inner.build_type() == t {
-            return Ok(true);
-        }
-        if inner.sleeping() {
-            return Ok(false);
-        }
-        let result = self.unit.build(t, pos)?;
-        if result {
-            inner.pending_goal = Pending {
-                valid_until: inner.last_seen + 3,
-                goal: PendingGoal::Build(t),
-            };
-        }
-        Ok(result)
+        inner.act(
+            |inner| {
+                if inner.build_type() == t {
+                    Ok(true)
+                } else {
+                    self.unit.build(t, pos)
+                }
+            },
+            PendingGoal::Build(t),
+            3,
+        )
     }
 
     pub fn morph(&self, t: UnitType) -> BwResult<bool> {
         let mut inner = self.inner.borrow_mut();
-        if inner.sleeping() {
-            return Ok(false);
-        }
-        if inner.build_type() == t {
-            return Ok(true);
-        }
-        let result = self.unit.morph(t)?;
-        if result {
-            inner.pending_goal = Pending {
-                valid_until: inner.last_seen + 5,
-                goal: PendingGoal::Morph(t),
-            };
-        }
-        Ok(result)
-    }
-
-    pub fn sleeping(&self) -> bool {
-        self.inner.borrow().sleeping()
+        inner.act(
+            |inner| {
+                if inner.build_type() == t {
+                    Ok(true)
+                } else {
+                    self.unit.morph(t)
+                }
+            },
+            PendingGoal::Morph(t),
+            5,
+        )
     }
 
     pub fn damage_to(&self, target: &SUnit) -> i32 {
@@ -550,32 +566,26 @@ impl SUnit {
 
     pub fn attack(&self, unit: &SUnit) -> BwResult<bool> {
         let mut inner = self.inner.borrow_mut();
-        if inner.sleeping() {
-            return Ok(false);
-        }
-        let result = inner.order_target().as_ref() == Some(unit) || self.unit.attack(&unit.unit)?;
-        if result {
-            inner.pending_goal = Pending {
-                valid_until: inner.last_seen + 4,
-                goal: PendingGoal::Attack(unit.clone()),
-            };
-        }
-        Ok(true)
+        inner.act(
+            |inner| {
+                if inner.order_target().as_ref() == Some(unit) {
+                    Ok(true)
+                } else {
+                    self.unit.attack(&unit.unit)
+                }
+            },
+            PendingGoal::Attack(unit.clone()),
+            4,
+        )
     }
 
     pub fn attack_position(&self, pos: Position) -> BwResult<bool> {
         let mut inner = self.inner.borrow_mut();
-        if inner.sleeping() {
-            return Ok(false);
-        }
-        let result = inner.target_position == Some(pos) || self.unit.attack(pos)?;
-        if result {
-            inner.pending_goal = Pending {
-                valid_until: inner.last_seen + 4,
-                goal: PendingGoal::AttackPosition(pos),
-            };
-        }
-        Ok(true)
+        inner.act(
+            |_| self.unit.attack(pos),
+            PendingGoal::AttackPosition(pos),
+            4,
+        )
     }
 }
 
@@ -645,7 +655,8 @@ pub struct UnitInfo {
     pub position: Position,
     pub is_completed: bool,
     pub player_id: usize,
-    pub carrying: bool,
+    pub carrying_gas: bool,
+    pub carrying_minerals: bool,
     gathering_minerals: bool,
     gathering_gas: bool,
     pub ground_weapon: Weapon,
@@ -666,6 +677,7 @@ pub struct UnitInfo {
     pub is_flying: bool,
     pub hit_points: i32,
     pub shields: i32,
+    pub alive: bool,
     pub exists: bool,
     pub is_being_healed: bool,
     pub detected: bool,
@@ -685,6 +697,7 @@ pub struct UnitInfo {
     pub interruptible: bool,
     pub target_position: Option<Position>,
     pub remaining_build_time: i32,
+    pub stuck_frames: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -704,13 +717,15 @@ impl UnitInfo {
         let player = unit.get_player();
         Self {
             id: unit.get_id(),
+            alive: unit.exists() || !game.is_visible(unit.get_position().to_tile_position()),
             type_: unit.get_type(),
             build_type: unit.get_build_type(),
             tile_position: unit.get_tile_position(),
             position: unit.get_position(),
             is_completed: unit.is_completed(),
             player_id: unit.get_player().get_id(),
-            carrying: unit.is_carrying_gas() || unit.is_carrying_minerals(),
+            carrying_gas: unit.is_carrying_gas(),
+            carrying_minerals: unit.is_carrying_minerals(),
             gathering_minerals: unit.is_gathering_minerals(),
             gathering_gas: unit.is_gathering_gas(),
             burrowed: unit.is_burrowed(),
@@ -732,14 +747,16 @@ impl UnitInfo {
                 max_hits: unit.get_type().max_ground_hits(),
                 cooldown: unit.get_ground_weapon_cooldown(),
                 weapon_type: unit.get_type().ground_weapon(),
-                damage: player.damage(unit.get_type().ground_weapon()),
+                damage: player.damage(unit.get_type().ground_weapon())
+                    * unit.get_type().max_ground_hits(),
             },
             air_weapon: Weapon {
                 max_range: player.weapon_max_range(unit.get_type().air_weapon()),
                 max_hits: unit.get_type().max_air_hits(),
                 cooldown: unit.get_air_weapon_cooldown(),
                 weapon_type: unit.get_type().air_weapon(),
-                damage: player.damage(unit.get_type().air_weapon()),
+                damage: player.damage(unit.get_type().air_weapon())
+                    * unit.get_type().max_air_hits(),
             },
             armor: player.armor(unit.get_type()),
             player: player.into(),
@@ -769,11 +786,30 @@ impl UnitInfo {
             interruptible: unit.is_interruptible(),
             target_position: unit.get_target_position(),
             remaining_build_time: unit.get_remaining_build_time(),
+            stuck_frames: 0,
         }
     }
 
-    fn sleeping(&self) -> bool {
-        self.pending_goal.valid_until >= self.last_seen
+    fn act(
+        &mut self,
+        cmd: impl Fn(&Self) -> BwResult<bool>,
+        goal: PendingGoal,
+        sleep: i32,
+    ) -> BwResult<bool> {
+        match &self.pending_goal.goal {
+            PendingGoal::Nothing => {
+                let result = cmd(self)?;
+                if result {
+                    self.pending_goal = Pending {
+                        goal,
+                        valid_until: self.last_seen + sleep,
+                    };
+                }
+                Ok(result)
+            }
+            x if x == &goal => Ok(true),
+            _ => Ok(false),
+        }
     }
 
     pub fn build_type(&self) -> UnitType {
