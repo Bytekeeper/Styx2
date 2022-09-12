@@ -122,15 +122,15 @@ impl Squad {
             if distance_to_target > weapon_range as f64 + 64.0 {
                 return None;
             }
-            let damage = u.get_ground_weapon().damage;
-            let cooldown = u.get_ground_weapon().weapon_type.damage_cooldown();
+            let mut damage = u.get_ground_weapon().damage;
+            let mut cooldown = u.get_ground_weapon().weapon_type.damage_cooldown();
             if u.get_type() == UnitType::Terran_Bunker {
                 damage = UnitType::Terran_Marine.ground_weapon().damage_amount();
                 cooldown = UnitType::Terran_Marine.ground_weapon().damage_cooldown();
             }
             let ground_damage_per_frame = damage / cooldown;
-            let damage = u.get_air_weapon().damage;
-            let cooldown = u.get_air_weapon().weapon_type.damage_cooldown();
+            let mut damage = u.get_air_weapon().damage;
+            let mut cooldown = u.get_air_weapon().weapon_type.damage_cooldown();
             if u.get_type() == UnitType::Terran_Bunker {
                 damage = UnitType::Terran_Marine.ground_weapon().damage_amount();
                 cooldown = UnitType::Terran_Marine.ground_weapon().damage_cooldown();
