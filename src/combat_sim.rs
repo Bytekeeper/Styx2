@@ -118,3 +118,17 @@ impl Agent {
         self.speed_squared = (self.speed * self.speed).round() as i32;
     }
 }
+
+struct Simulator {
+    player_a: Vec<Agent>,
+    player_b: Vec<Agent>,
+    frame_skip: i32,
+}
+
+impl Simulator {
+    pub fn simulate_for(&mut self, mut frames: i32) {
+        while frames > 0 {
+            frames = frames.saturating_sub(self.frame_skip);
+        }
+    }
+}

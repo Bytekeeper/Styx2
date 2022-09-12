@@ -74,7 +74,12 @@ impl Squad {
     }
 
     pub fn update(&mut self, module: &MyModule) {
-        let enemies: Vec<_> = module.units.enemy.iter().filter(|it| it.alive()).collect();
+        let enemies: Vec<_> = module
+            .units
+            .enemy
+            .iter()
+            .filter(|it| !it.missing() && it.completed())
+            .collect();
         let vanguard = self
             .units
             .iter()
@@ -99,88 +104,104 @@ impl Squad {
                 )
                 .1,
         };
+        struct CombatUnit {
+            health: i32,
+            ground: bool,
+            ground_damage_per_frame: i32,
+            air_damage_per_frame: i32,
+        }
+        let sim_frames = 48;
         let dmg = |u: &SUnit| {
-            let fct = if u.get_type().is_worker() { 0.5 } else { 1.0 };
-            let mut damage = u.get_ground_weapon().damage.max(u.get_air_weapon().damage);
-            let mut cooldown = u
+            let weapon_range = u
                 .get_ground_weapon()
-                .weapon_type
-                .damage_cooldown()
-                .max(u.get_air_weapon().weapon_type.damage_cooldown());
+                .max_range
+                .max(u.get_air_weapon().max_range) as u32;
+            let distance_to_target =
+                (u.position().distance(self.target) - u.top_speed() * sim_frames as f64).max(0.0);
+            // If out of range incl. some leeway for buildings, don't include in sim
+            if distance_to_target > weapon_range as f64 + 64.0 {
+                return None;
+            }
+            let damage = u.get_ground_weapon().damage;
+            let cooldown = u.get_ground_weapon().weapon_type.damage_cooldown();
             if u.get_type() == UnitType::Terran_Bunker {
                 damage = UnitType::Terran_Marine.ground_weapon().damage_amount();
                 cooldown = UnitType::Terran_Marine.ground_weapon().damage_cooldown();
             }
-            fct * (200 + u.hit_points() + u.shields()) as f32 * damage as f32
-                / (cooldown + 1) as f32
+            let ground_damage_per_frame = damage / cooldown;
+            let damage = u.get_air_weapon().damage;
+            let cooldown = u.get_air_weapon().weapon_type.damage_cooldown();
+            if u.get_type() == UnitType::Terran_Bunker {
+                damage = UnitType::Terran_Marine.ground_weapon().damage_amount();
+                cooldown = UnitType::Terran_Marine.ground_weapon().damage_cooldown();
+            }
+            let air_damage_per_frame = damage / cooldown;
+            Some(CombatUnit {
+                health: u.hit_points() + u.shields(),
+                ground: !u.flying(),
+                ground_damage_per_frame,
+                air_damage_per_frame,
+            })
         };
-        let mut enemy_strength: f32 = enemies
-            .iter()
-            .filter(|it| it.position().distance_squared(uc.vanguard.position()) < 500 * 500)
-            .map(|it| dmg(it))
-            .sum::<f32>();
-        let my_strength: f32 = uc
-            .units
-            .iter()
-            .filter(|it| it.position().distance_squared(uc.vanguard.position()) < 500 * 500)
-            .map(|it| dmg(it))
-            .sum::<f32>();
+        let mut my_units: Vec<_> = uc.units.iter().filter_map(|it| dmg(it)).collect();
+        let mut enemy_units: Vec<_> = enemies.iter().filter_map(|it| dmg(it)).collect();
+        my_units.sort_by_key(|cu| -cu.health);
+        enemy_units.sort_by_key(|cu| -cu.health);
 
-        if uc.vanguard.position().distance_squared(self.target) < 600 * 600 {
-            enemy_strength *= 0.7;
-        }
+        let apply_damage = |units: &mut Vec<CombatUnit>, enemies: &[CombatUnit]| {
+            let mut ground_damage = units
+                .iter()
+                .map(|it| it.ground_damage_per_frame * sim_frames)
+                .sum();
+            let mut air_damage = units
+                .iter()
+                .map(|it| it.ground_damage_per_frame * sim_frames)
+                .sum();
+            for unit in units {
+                let damage = if unit.ground {
+                    &mut ground_damage
+                } else {
+                    &mut air_damage
+                };
+                if *damage >= unit.health {
+                    *damage -= unit.health;
+                } else {
+                    unit.health -= *damage;
+                    *damage = 0;
+                }
+            }
+        };
+        apply_damage(&mut my_units, &enemy_units);
+        apply_damage(&mut enemy_units, &my_units);
+
+        let go = my_units.iter().filter(|u| u.health == 0).count()
+            <= enemy_units.iter().filter(|u| u.health == 0).count();
+        let vs = format!("{go}");
+        CVIS.lock().unwrap().draw_text(
+            uc.vanguard.position().x,
+            uc.vanguard.position().y,
+            vs.clone(),
+        );
         let base = module
             .units
             .my_completed
             .iter()
-            .find(|u| u.get_type().is_resource_depot() && u.completed())
-            .map(|u| u.position())
-            .ok_or(FailureReason::misc("No base found"));
-        if base.is_err() {
+            .filter(|u| u.get_type().is_resource_depot())
+            .next()
+            .unwrap()
+            .position();
+        module
+            .game
+            .draw_text_map(uc.vanguard.position() + Position::new(0, 10), &vs);
+        if !go {
+            for u in uc.units {
+                if enemies.iter().any(|it| it.distance_to(*u) < 300) {
+                    u.move_to(base);
+                } else {
+                    u.move_to(uc.vanguard.position());
+                }
+            }
             return;
-        }
-        let base = base.unwrap();
-        CVIS.lock().unwrap().draw_text(
-            uc.vanguard.position().x,
-            uc.vanguard.position().y,
-            format!("{:.2} vs {:.2}", my_strength, enemy_strength),
-        );
-        if uc.vanguard.position().distance_squared(base) > 500 * 500 {
-            if enemy_strength * 1.2 > my_strength {
-                let rear_guard = self
-                    .units
-                    .iter()
-                    .max_by_key(|u| {
-                        module
-                            .map
-                            .get_path(
-                                u.position().to_walk_position(),
-                                self.target.to_walk_position(),
-                            )
-                            .1
-                    })
-                    .unwrap();
-                for u in uc.units {
-                    if enemies.iter().any(|it| it.distance_to(*u) < 300) {
-                        u.move_to(base);
-                    } else {
-                        u.move_to((rear_guard.position() + uc.vanguard.position()) / 2);
-                    }
-                }
-                return;
-            }
-            if my_strength * 1.2 < enemy_strength {
-                for u in uc.units {
-                    if enemies.iter().any(|it| it.distance_to(*u) < 300) {
-                        u.move_to(base);
-                    } else {
-                        u.move_to(uc.vanguard.position());
-                    }
-                }
-                return;
-            }
-        } else {
-            self.target = base;
         }
         let solution = module.select_targets(uc, enemies, self.target, false);
         for (u, t) in solution {

@@ -203,7 +203,7 @@ impl MyModule {
                     );
                     if !path.0.is_empty() {
                         dist_to_target_position.insert(unit, path.1);
-                        if (path.1 - cluster.vanguard_dist_to_target) > 700
+                        if (path.1.saturating_sub(cluster.vanguard_dist_to_target)) > 700
                             && !unit.is_in_weapon_range(&cluster.vanguard)
                         {
                             CVIS.lock().unwrap().log(format!(

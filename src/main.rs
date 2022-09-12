@@ -18,7 +18,6 @@ mod tracker;
 mod train;
 mod upgrade;
 
-use build::*;
 use cherry_vis::*;
 use gathering::*;
 use gms::*;
@@ -73,7 +72,7 @@ impl MyModule {
         vanguard: &SUnit,
     ) -> bool {
         // TODO
-        false
+        true
     }
     pub fn ensure_free_supply(&mut self, amount: i32) {
         let supply_delta = self.get_pending_supply();
@@ -152,12 +151,7 @@ impl MyModule {
             ..Default::default()
         });
 
-        if !self
-            .units
-            .enemy
-            .iter()
-            .any(|e| e.alive() && e.get_type().is_building())
-        {
+        if !self.units.enemy.iter().any(|e| e.get_type().is_building()) {
             self.scout(ScoutParams::default());
             let target = self.units.enemy.iter().map(|u| u.position()).next();
             if let Some(target) = target {
@@ -330,7 +324,7 @@ impl AiModule for MyModule {
     }
 
     fn on_unit_destroy(&mut self, _game: &Game, unit: Unit) {
-        // self.units.remove_unit(unit);
+        self.units.mark_dead(&unit);
     }
 
     fn on_frame(&mut self, game: &Game) {
@@ -381,13 +375,13 @@ impl AiModule for MyModule {
             // self.opening_9poolspire();
             self.ensure_gathering_minerals();
             // dbg!("CP: {}", self.map.choke_points.len());
-            // for cp in &self.map.choke_points {
-            //     dbg!("CP-wps: {}", cp.walk_positions.len());
-            //     for wp in &cp.walk_positions {
-            //         let p = wp.to_position();
-            //         CVIS.lock().unwrap().draw_circle(p.x, p.y, 4, Color::Yellow);
-            //     }
-            // }
+            for cp in &self.map.choke_points {
+                for wp in &cp.walk_positions {
+                    let p = wp.to_position();
+                    // CVIS.lock().unwrap().draw_circle(p.x, p.y, 4, Color::Yellow);
+                    game.draw_circle_map(p, 4, Color::Blue, false);
+                }
+            }
             Ok(())
         })()
         .unwrap();

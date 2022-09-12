@@ -34,11 +34,16 @@ impl Units {
 
     pub fn update(&mut self, game: &Game, players: &Players) {
         for u in self.all.values() {
-            u.inner.borrow_mut().is_visible = false;
-            u.inner.borrow_mut().exists = false;
+            let mut inner = u.inner.borrow_mut();
+            inner.is_visible = false;
+            inner.exists = false;
+            inner.missing = game.is_visible(inner.position.to_tile_position());
         }
+        self.all.retain(|_, u| {
+            let inner = u.inner.borrow();
+            !inner.missing || inner.type_.is_flying_building() || !inner.type_.is_building()
+        });
         for u in game.get_all_units() {
-            let id = u.get_id();
             let new_unit_info = UnitInfo::new(game, &u);
             let unit = self
                 .all
@@ -56,11 +61,11 @@ impl Units {
             }
             if !inner.is_moving
                 && inner
-                    .order_target_position
-                    // TODO: This seems not to work...
+                    .target_position
                     .map(|p| p.distance_squared(inner.position) > 64 * 64)
                     .unwrap_or(false)
             {
+                // dbg!(inner.position, inner.target_position);
                 inner.stuck_frames = old.stuck_frames + 1;
             } else {
                 inner.stuck_frames = 0;
@@ -93,6 +98,10 @@ impl Units {
             .filter(|it| it.get_type().is_mineral_field())
             .cloned()
             .collect();
+    }
+
+    pub fn mark_dead(&mut self, unit: &Unit) {
+        self.all.remove(&unit.get_id());
     }
 }
 
@@ -154,7 +163,7 @@ impl SUnit {
 
     pub fn unstick(&self) {
         let mut inner = self.inner.borrow_mut();
-        if inner.stuck_frames < 12 {
+        if inner.stuck_frames < 8 {
             return;
         }
         dbg!("Unsticking", self.unit.get_id());
@@ -178,8 +187,8 @@ impl SUnit {
         }
     }
 
-    pub fn alive(&self) -> bool {
-        self.inner.borrow().alive
+    pub fn missing(&self) -> bool {
+        self.inner.borrow().missing
     }
 
     pub fn completed(&self) -> bool {
@@ -677,7 +686,8 @@ pub struct UnitInfo {
     pub is_flying: bool,
     pub hit_points: i32,
     pub shields: i32,
-    pub alive: bool,
+    // Not at expected position when last checked
+    pub missing: bool,
     pub exists: bool,
     pub is_being_healed: bool,
     pub detected: bool,
@@ -717,7 +727,7 @@ impl UnitInfo {
         let player = unit.get_player();
         Self {
             id: unit.get_id(),
-            alive: unit.exists() || !game.is_visible(unit.get_position().to_tile_position()),
+            missing: false,
             type_: unit.get_type(),
             build_type: unit.get_build_type(),
             tile_position: unit.get_tile_position(),
