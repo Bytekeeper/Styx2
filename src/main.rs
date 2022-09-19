@@ -197,13 +197,18 @@ impl MyModule {
                 .my_completed
                 .iter()
                 .filter(|u| u.get_type().is_resource_depot())
-                .next() // TODO What if we lost our depot?
-                .unwrap();
+                .next(); // TODO What if we lost our depot?
+            let base = if let Some(base) = base {
+                base
+            } else {
+                anyhow::bail!("No base");
+            };
             let target = self
                 .units
                 .enemy
                 .iter()
-                .find(|u| u.get_type().is_building())
+                .filter(|u| u.get_type().is_building())
+                .min_by_key(|u| self.map.get_path(base.position(), u.position()).1)
                 .map(|u| u.position())
                 .unwrap();
             // let mut x = target;

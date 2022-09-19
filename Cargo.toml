@@ -7,8 +7,8 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rsbwapi = { git = "https://github.com/Bytekeeper/rsbwapi.git", features = ["metrics"] }
-#rsbwapi = { path = "../rsbwapi", features = ["metrics"] }
+#rsbwapi = { git = "https://github.com/Bytekeeper/rsbwapi.git", features = ["metrics"] }
+rsbwapi = { path = "../rsbwapi", features = ["metrics"] }
 fixed = "1.19"
 memchr = "2.2.2"
 derive_more = "0.99"

@@ -184,7 +184,7 @@ impl SUnit {
         if inner.stuck_frames < 8 {
             return;
         }
-        dbg!("Unsticking", self.unit.get_id());
+        dbg!("Unsticking", self.unit.get_id(), self.unit.get_type());
         inner.stuck_frames = 0;
         drop(inner);
         self.stop();

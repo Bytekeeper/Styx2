@@ -39,11 +39,26 @@ impl Squad {
                         if u.exists() && u.gathering() {
                             agent.sleep_timer = 9999;
                         }
+                        if !u.get_type().can_attack() {
+                            agent.attack_target_priority = cs::TargetingPriority::Medium;
+                        }
                         agent
                     })
                     .collect(),
                 script: cs::Attacker,
             },
+        };
+        let mut flee_sim = cs::Simulator {
+            player_a: cs::Player {
+                agents: simulator
+                    .player_a
+                    .agents
+                    .iter()
+                    .map(|a| a.clone().with_speed_factor(0.8))
+                    .collect(),
+                script: cs::Retreater,
+            },
+            player_b: simulator.player_b.clone(),
         };
         let pos_a: Vec<_> = simulator
             .player_a
@@ -62,48 +77,52 @@ impl Squad {
                 .iter()
                 .any(|e| u.is_in_weapon_range(e) || e.is_in_weapon_range(u))
         });
+        flee_sim.simulate_for(8 * 24);
         for i in 0..8 {
-            cvis().log(format!(
-                "{}\n###\n{}",
-                simulator
-                    .player_a
-                    .agents
-                    .iter()
-                    .map(|u| format!(
-                        "{:?}, alive: {} h:{}, s:{}, sl: {}, cd: {}",
-                        u.unit_type,
-                        u.is_alive,
-                        u.health(),
-                        u.shields(),
-                        u.sleep_timer,
-                        u.cooldown
-                    )
-                    .split_once('_')
-                    .unwrap()
-                    .1
-                    .to_string())
-                    .collect::<String>(),
-                simulator
-                    .player_b
-                    .agents
-                    .iter()
-                    .map(|u| format!(
-                        "{:?}, alive: {} h:{}, s: {}, sl: {}, cd: {}\n",
-                        u.unit_type,
-                        u.is_alive,
-                        u.health(),
-                        u.shields(),
-                        u.sleep_timer,
-                        u.cooldown
-                    )
-                    .split_once('_')
-                    .unwrap()
-                    .1
-                    .to_string())
-                    .collect::<String>()
-            ));
+            // cvis().log(format!(
+            //     "{}\n###\n{}",
+            //     simulator
+            //         .player_a
+            //         .agents
+            //         .iter()
+            //         .map(|u| format!(
+            //             "{:?}, alive: {} h:{}, s:{}, sl: {}, cd: {}",
+            //             u.unit_type,
+            //             u.is_alive,
+            //             u.health(),
+            //             u.shields(),
+            //             u.sleep_timer,
+            //             u.cooldown
+            //         )
+            //         .split_once('_')
+            //         .unwrap()
+            //         .1
+            //         .to_string())
+            //         .collect::<String>(),
+            //     simulator
+            //         .player_b
+            //         .agents
+            //         .iter()
+            //         .map(|u| format!(
+            //             "{:?}, alive: {} h:{}, s: {}, sl: {}, cd: {}\n",
+            //             u.unit_type,
+            //             u.is_alive,
+            //             u.health(),
+            //             u.shields(),
+            //             u.sleep_timer,
+            //             u.cooldown
+            //         )
+            //         .split_once('_')
+            //         .unwrap()
+            //         .1
+            //         .to_string())
+            //         .collect::<String>()
+            // ));
             simulator.simulate_for(24);
         }
+        // TODO Very simple here, should be based on current state of the game and strategy
+        // ie. an All-In can afford to lose more value, other tactics require stalling and should
+        // not take heavy loses.
         let rating = |u: &cs::Agent| {
             let res = (u.unit_type.mineral_price() + 3 * u.unit_type.gas_price())
                 / (1 + u.unit_type.is_two_units_in_one_egg() as i32);
@@ -133,6 +152,26 @@ impl Squad {
         //         // );
         //     }
         // }
+        // TODO What units of the squad have a mostly negative impact and could be pulled back?
+        let cannon_fodder: Vec<_> = simulator
+            .player_a
+            .agents
+            .iter()
+            .filter_map(|u| {
+                if !u.is_alive && u.attack_counter == 0 {
+                    Some(u.id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let my_dead_after_fleeing: i32 = flee_sim
+            .player_a
+            .agents
+            .iter()
+            .filter(|u| !u.is_alive)
+            .map(|u| rating(u))
+            .sum();
         let my_dead: i32 = simulator
             .player_a
             .agents
@@ -164,12 +203,15 @@ impl Squad {
             it.get_type().ground_weapon() != WeaponType::None
                 && it.position().distance_squared(base) < 300 * 300
         });
-        let hysteresis = (engaged as i32) * enemy_dead / 5;
         if base_in_danger {
             self.target = base;
         }
-        let go = base_in_danger || my_dead <= enemy_dead + hysteresis;
-        let vs = format!("atk: {go}: {my_dead} - {enemy_dead} (+ hyst: {hysteresis})",);
+        // "Hysteresis": If I don't lose more value fighting than fleeing, fight!
+        let go = base_in_danger || my_dead - enemy_dead <= my_dead_after_fleeing;
+        let vs = format!(
+            "atk: {go}: {my_dead} - {enemy_dead} <= {my_dead_after_fleeing} {}",
+            cannon_fodder.len()
+        );
         cvis().draw_text(
             uc.vanguard.position().x,
             uc.vanguard.position().y + 50,

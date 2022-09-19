@@ -85,7 +85,7 @@ impl Default for TargetingPriority {
 
 #[derive(Default, Clone)]
 pub struct Agent {
-    attack_target_priority: TargetingPriority,
+    pub attack_target_priority: TargetingPriority,
     armor: I24F8,
     shield_upgrades: i32,
     elevation_level: i32,
@@ -112,7 +112,7 @@ pub struct Agent {
     max_shields: I24F8,
     energy: I24F8,
     max_energy: I24F8,
-    attack_counter: i32,
+    pub attack_counter: i32,
     pub cooldown: i32,
     cooldown_upgrade: bool,
     pub sleep_timer: i32,
@@ -143,6 +143,7 @@ pub struct Agent {
     restore_target: Option<usize>,
     interceptors: Vec<i32>,
     pub unit_type: UnitType,
+    pub id: usize,
 }
 
 impl Agent {
@@ -164,6 +165,7 @@ impl Agent {
             false,
         );
         Self {
+            id: unit.id(),
             energy: I24F8::from_num(unit.energy()),
             health: I24F8::from_num(unit.hit_points()),
             x: unit.position().x,
@@ -337,6 +339,20 @@ impl Agent {
 
     pub fn with_x(self, x: i32) -> Agent {
         Self { x, ..self }
+    }
+
+    pub fn with_target_priority(self, attack_target_priority: TargetingPriority) -> Agent {
+        Self {
+            attack_target_priority,
+            ..self
+        }
+    }
+
+    pub fn with_speed_factor(self, speed_factor: f32) -> Agent {
+        Self {
+            speed_factor,
+            ..self
+        }
     }
 
     fn weapon(
@@ -690,6 +706,71 @@ impl Script for Healer {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct Retreater;
+
+impl Script for Retreater {
+    fn simulate(
+        &mut self,
+        agent_index: usize,
+        allies: &mut [Agent],
+        enemies: &mut [Agent],
+    ) -> bool {
+        let mut selected_enemy: Option<usize> = None;
+        let mut selected_distance_squared: i32 = std::i32::MAX;
+        let agent = &mut allies[agent_index];
+        let mut selected_weapon = &agent.ground_weapon;
+
+        if let Some(target_index) = agent.attack_target {
+            let enemy = &enemies[target_index];
+            if enemy.health > 0 {
+                let distance_squared = distance_squared(agent, enemy);
+                selected_weapon = enemy.weapon_vs(agent);
+                if distance_squared >= selected_weapon.min_range_squared
+                    && distance_squared <= selected_weapon.max_range_squared
+                {
+                    selected_enemy = Some(target_index);
+                    selected_distance_squared = distance_squared;
+                }
+            }
+        }
+
+        if selected_enemy.is_none() {
+            for (i, enemy) in enemies
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.health > 0 && e.detected && !e.is_stasised())
+            {
+                let weapon = enemy.weapon_vs(agent);
+                if weapon.damage == 0 {
+                    continue;
+                }
+                let distance_squared = distance_squared(agent, enemy);
+                if distance_squared >= weapon.min_range_squared
+                    && distance_squared < selected_distance_squared
+                {
+                    selected_distance_squared = distance_squared;
+                    selected_enemy = Some(i);
+                    selected_weapon = weapon;
+
+                    // If it can hit us "now", we stop searching
+                    if selected_distance_squared <= weapon.max_range_squared
+                        && enemy.attack_target_priority == TargetingPriority::Highest
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if selected_enemy.is_none() {
+            return false;
+        }
+        return flee(agent, enemies);
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct Attacker;
 
 fn distance_squared(a: &Agent, b: &Agent) -> i32 {
@@ -1105,12 +1186,13 @@ fn reduce_damage_by_target_size_and_damage_type(
     }
 }
 
+#[derive(Clone)]
 pub struct Simulator<A, B> {
     pub player_a: Player<A>,
     pub player_b: Player<B>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Player<S> {
     pub agents: Vec<Agent>,
     pub script: S,
@@ -1456,6 +1538,49 @@ mod test {
             0
         );
     }
+
+    #[test]
+    fn should_attack_higher_prio_target() {
+        let ling = Agent::from(UnitType::Zerg_Zergling).with_x(200);
+        let mut simulator = Simulator {
+            player_a: Player {
+                agents: vec![ling.clone(), ling.clone(), ling.clone()],
+                script: Attacker,
+            },
+            player_b: Player {
+                agents: vec![
+                    Agent::from(UnitType::Protoss_Pylon)
+                        .with_x(180)
+                        .with_target_priority(TargetingPriority::Medium),
+                    Agent::from(UnitType::Protoss_Zealot),
+                ],
+                script: Attacker,
+            },
+        };
+
+        let frames = simulator.simulate_for(192);
+        eprintln!("{frames}");
+
+        assert_eq!(
+            simulator
+                .player_b
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            1
+        );
+        assert_eq!(
+            simulator
+                .player_a
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            2
+        );
+    }
+
     #[test]
     fn ten_lings_kill_3_zealots() {
         let ling = Agent::from(UnitType::Zerg_Zergling).with_x(200);
