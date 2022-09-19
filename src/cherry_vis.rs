@@ -1,6 +1,7 @@
 use crate::SUnit;
 use lazy_static::lazy_static;
 use rsbwapi::{Color, Game, Unit, UnitType};
+use std::panic::Location;
 use std::sync::Mutex;
 
 lazy_static! {
@@ -21,6 +22,10 @@ pub trait CherryVisOutput {
     fn draw_circle(&mut self, x: i32, y: i32, radius: i32, color: Color) {}
     fn log_unit_frame(&mut self, unit: &SUnit, message: String) {}
     fn log(&mut self, message: String) {}
+}
+
+pub fn cvis() -> std::sync::MutexGuard<'static, implementation::CherryVis> {
+    CVIS.lock().unwrap()
 }
 
 #[cfg(not(feature = "cvis"))]
@@ -57,7 +62,7 @@ pub mod implementation {
     struct Attachment {}
 
     #[derive(Serialize)]
-    struct LogEntry {
+    pub struct LogEntry {
         frame: i32,
         message: String,
         file: String,
@@ -85,10 +90,10 @@ pub mod implementation {
         heatmaps: [(); 0],
         draw_commands: HashMap<i32, Vec<DrawCommand>>,
         units_first_seen: HashMap<String, Vec<FirstSeen>>,
-        logs: Vec<LogEntry>,
+        pub logs: Vec<LogEntry>,
         units_logs: HashMap<String, Vec<LogEntry>>,
         #[serde(skip)]
-        frame: i32,
+        pub frame: i32,
     }
 
     impl CherryVisOutput for CherryVis {
@@ -154,17 +159,17 @@ pub mod implementation {
                 });
         }
 
-        fn draw_unit_pos_line(&mut self, unit: &SUnit, x: i32, y: i32, color: Color) {
-            self.draw_commands
-                .entry(self.frame)
-                .or_insert_with(|| vec![])
-                .push(DrawCommand {
-                    code: 22,
-                    args: vec![unit.id() as i32, x, y, color as i32],
-                    r#str: "".to_string(),
-                    cherrypi_ids_args_indices: vec![],
-                });
-        }
+        // fn draw_unit_pos_line(&mut self, unit: &SUnit, x: i32, y: i32, color: Color) {
+        //     self.draw_commands
+        //         .entry(self.frame)
+        //         .or_insert_with(|| vec![])
+        //         .push(DrawCommand {
+        //             code: 22,
+        //             args: vec![unit.id() as i32, x, y, color as i32],
+        //             r#str: "".to_string(),
+        //             cherrypi_ids_args_indices: vec![],
+        //         });
+        // }
 
         fn draw_line(&mut self, ax: i32, ay: i32, bx: i32, by: i32, color: Color) {
             self.draw_commands

@@ -55,4 +55,8 @@ impl SPlayer {
     pub fn is_me(&self) -> bool {
         self.relation == Relation::Me
     }
+
+    pub fn get_upgrade_level(&self, upgrade_type: UpgradeType) -> i32 {
+        self.player.get_upgrade_level(upgrade_type)
+    }
 }

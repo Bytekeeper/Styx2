@@ -9,13 +9,14 @@ edition = "2018"
 [dependencies]
 rsbwapi = { git = "https://github.com/Bytekeeper/rsbwapi.git", features = ["metrics"] }
 #rsbwapi = { path = "../rsbwapi", features = ["metrics"] }
+fixed = "1.19"
 memchr = "2.2.2"
 derive_more = "0.99"
 serde = "1.0"
-serde_yaml = "0.8"
+serde_yaml = "0.9"
 serde_json = { version = "1.0", optional = true }
 anyhow = "1.0"
-ahash = "0.7"
+ahash = "0.8"
 zstd = { version = "0.11", optional = true }
 num-traits = "0.2"
 lazy_static = { version = "1.4.0" }
@@ -25,5 +26,5 @@ cvis = ["zstd", "serde_json"]
 cvis_targeting = []
 
 [profile.release]
-strip=true
+#strip=true
 lto=true

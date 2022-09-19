@@ -1,4 +1,5 @@
 use crate::cherry_vis::*;
+use crate::combat_sim as cs;
 use crate::*;
 use rsbwapi::*;
 
@@ -8,71 +9,6 @@ pub struct Squad {
 }
 
 impl Squad {
-    pub fn engage(&self, module: &MyModule) {
-        let enemies: Vec<_> = module.units.enemy.iter().collect();
-        let vanguard = self
-            .units
-            .iter()
-            .min_by_key(|u| {
-                module
-                    .map
-                    .get_path(
-                        u.position().to_walk_position(),
-                        self.target.to_walk_position(),
-                    )
-                    .1
-            })
-            .unwrap();
-        let uc = UnitCluster {
-            vanguard,
-            units: &self.units.iter().collect::<Vec<_>>(),
-            vanguard_dist_to_target: module
-                .map
-                .get_path(
-                    vanguard.position().to_walk_position(),
-                    self.target.to_walk_position(),
-                )
-                .1,
-        };
-        let solution = module.select_targets(uc, enemies, self.target, false);
-        for (u, t) in solution {
-            if let Some(target) = &t {
-                CVIS.lock().unwrap().draw_unit_pos_line(
-                    &u,
-                    target.position().x,
-                    target.position().y,
-                    Color::Red,
-                );
-                CVIS.lock().unwrap().draw_line(
-                    u.position().x,
-                    u.position().y,
-                    target.position().x,
-                    target.position().y,
-                    Color::White,
-                );
-                assert!(u.exists());
-
-                if let Err(e) = u.attack(target) {
-                    CVIS.lock().unwrap().draw_text(
-                        u.position().x,
-                        u.position().y,
-                        format!("Attack failed: {:?}", e),
-                    );
-                    u.stop();
-                }
-            } else if !u.attacking() {
-                CVIS.lock().unwrap().draw_line(
-                    u.position().x,
-                    u.position().y,
-                    self.target.x,
-                    self.target.y,
-                    Color::Black,
-                );
-                u.attack_position(self.target);
-            }
-        }
-    }
-
     pub fn update(&mut self, module: &MyModule) {
         let enemies: Vec<_> = module
             .units
@@ -83,116 +19,172 @@ impl Squad {
         let vanguard = self
             .units
             .iter()
-            .min_by_key(|u| {
-                module
-                    .map
-                    .get_path(
-                        u.position().to_walk_position(),
-                        self.target.to_walk_position(),
-                    )
-                    .1
-            })
+            .min_by_key(|u| module.map.get_path(u.position(), self.target).1)
             .unwrap();
         let uc = UnitCluster {
             vanguard,
             units: &self.units.iter().collect::<Vec<_>>(),
-            vanguard_dist_to_target: module
-                .map
-                .get_path(
-                    vanguard.position().to_walk_position(),
-                    self.target.to_walk_position(),
-                )
-                .1,
+            vanguard_dist_to_target: module.map.get_path(vanguard.position(), self.target).1,
         };
-        struct CombatUnit {
-            health: i32,
-            ground: bool,
-            ground_damage_per_frame: i32,
-            air_damage_per_frame: i32,
+        let mut simulator = cs::Simulator {
+            player_a: cs::Player {
+                agents: self.units.iter().map(|u| cs::Agent::from_unit(u)).collect(),
+                script: cs::Attacker,
+            },
+            player_b: cs::Player {
+                agents: enemies
+                    .iter()
+                    .map(|u| {
+                        let mut agent = cs::Agent::from_unit(u);
+                        if u.exists() && u.gathering() {
+                            agent.sleep_timer = 9999;
+                        }
+                        agent
+                    })
+                    .collect(),
+                script: cs::Attacker,
+            },
+        };
+        let pos_a: Vec<_> = simulator
+            .player_a
+            .agents
+            .iter()
+            .map(|a| (a.x, a.y))
+            .collect();
+        let pos_b: Vec<_> = simulator
+            .player_b
+            .agents
+            .iter()
+            .map(|a| (a.x, a.y))
+            .collect();
+        let engaged = uc.units.iter().any(|u| {
+            enemies
+                .iter()
+                .any(|e| u.is_in_weapon_range(e) || e.is_in_weapon_range(u))
+        });
+        for i in 0..8 {
+            cvis().log(format!(
+                "{}\n###\n{}",
+                simulator
+                    .player_a
+                    .agents
+                    .iter()
+                    .map(|u| format!(
+                        "{:?}, alive: {} h:{}, s:{}, sl: {}, cd: {}",
+                        u.unit_type,
+                        u.is_alive,
+                        u.health(),
+                        u.shields(),
+                        u.sleep_timer,
+                        u.cooldown
+                    )
+                    .split_once('_')
+                    .unwrap()
+                    .1
+                    .to_string())
+                    .collect::<String>(),
+                simulator
+                    .player_b
+                    .agents
+                    .iter()
+                    .map(|u| format!(
+                        "{:?}, alive: {} h:{}, s: {}, sl: {}, cd: {}\n",
+                        u.unit_type,
+                        u.is_alive,
+                        u.health(),
+                        u.shields(),
+                        u.sleep_timer,
+                        u.cooldown
+                    )
+                    .split_once('_')
+                    .unwrap()
+                    .1
+                    .to_string())
+                    .collect::<String>()
+            ));
+            simulator.simulate_for(24);
         }
-        let sim_frames = 48;
-        let dmg = |u: &SUnit| {
-            let weapon_range = u
-                .get_ground_weapon()
-                .max_range
-                .max(u.get_air_weapon().max_range) as u32;
-            let distance_to_target =
-                (u.position().distance(self.target) - u.top_speed() * sim_frames as f64).max(0.0);
-            // If out of range incl. some leeway for buildings, don't include in sim
-            if distance_to_target > weapon_range as f64 + 64.0 {
-                return None;
-            }
-            let mut damage = u.get_ground_weapon().damage;
-            let mut cooldown = u.get_ground_weapon().weapon_type.damage_cooldown();
-            if u.get_type() == UnitType::Terran_Bunker {
-                damage = UnitType::Terran_Marine.ground_weapon().damage_amount();
-                cooldown = UnitType::Terran_Marine.ground_weapon().damage_cooldown();
-            }
-            let ground_damage_per_frame = damage / cooldown;
-            let mut damage = u.get_air_weapon().damage;
-            let mut cooldown = u.get_air_weapon().weapon_type.damage_cooldown();
-            if u.get_type() == UnitType::Terran_Bunker {
-                damage = UnitType::Terran_Marine.ground_weapon().damage_amount();
-                cooldown = UnitType::Terran_Marine.ground_weapon().damage_cooldown();
-            }
-            let air_damage_per_frame = damage / cooldown;
-            Some(CombatUnit {
-                health: u.hit_points() + u.shields(),
-                ground: !u.flying(),
-                ground_damage_per_frame,
-                air_damage_per_frame,
-            })
+        let rating = |u: &cs::Agent| {
+            let res = (u.unit_type.mineral_price() + 3 * u.unit_type.gas_price())
+                / (1 + u.unit_type.is_two_units_in_one_egg() as i32);
+            assert!(res > 0);
+            res
         };
-        let mut my_units: Vec<_> = uc.units.iter().filter_map(|it| dmg(it)).collect();
-        let mut enemy_units: Vec<_> = enemies.iter().filter_map(|it| dmg(it)).collect();
-        my_units.sort_by_key(|cu| -cu.health);
-        enemy_units.sort_by_key(|cu| -cu.health);
-
-        let apply_damage = |units: &mut Vec<CombatUnit>, enemies: &[CombatUnit]| {
-            let mut ground_damage = units
-                .iter()
-                .map(|it| it.ground_damage_per_frame * sim_frames)
-                .sum();
-            let mut air_damage = units
-                .iter()
-                .map(|it| it.ground_damage_per_frame * sim_frames)
-                .sum();
-            for unit in units {
-                let damage = if unit.ground {
-                    &mut ground_damage
-                } else {
-                    &mut air_damage
-                };
-                if *damage >= unit.health {
-                    *damage -= unit.health;
-                } else {
-                    unit.health -= *damage;
-                    *damage = 0;
-                }
-            }
-        };
-        apply_damage(&mut my_units, &enemy_units);
-        apply_damage(&mut enemy_units, &my_units);
-
-        let go = my_units.iter().filter(|u| u.health == 0).count()
-            <= enemy_units.iter().filter(|u| u.health == 0).count();
-        let vs = format!("{go}");
-        CVIS.lock().unwrap().draw_text(
-            uc.vanguard.position().x,
-            uc.vanguard.position().y,
-            vs.clone(),
-        );
+        // for agents in [
+        //     (simulator.player_a.agents.iter(), pos_a),
+        //     (simulator.player_b.agents.iter(), pos_b),
+        // ] {
+        //     for (u, old) in agents.0.zip(agents.1) {
+        //         cvis().draw_line(u.x, u.y, old.0, old.1, Color::White);
+        //         cvis().draw_circle(
+        //             u.x,
+        //             u.y,
+        //             4,
+        //             if u.is_alive { Color::Green } else { Color::Red },
+        //         );
+        //         // cvis().draw_text(
+        //         //     u.x,
+        //         //     u.y + 10,
+        //         //     format!("{:?}: {}", u.unit_type, rating(u))
+        //         //         .split_once('_')
+        //         //         .unwrap()
+        //         //         .1
+        //         //         .to_string(),
+        //         // );
+        //     }
+        // }
+        let my_dead: i32 = simulator
+            .player_a
+            .agents
+            .iter()
+            .filter(|u| !u.is_alive)
+            .map(|u| rating(u))
+            .sum();
+        let enemy_dead: i32 = simulator
+            .player_b
+            .agents
+            .iter()
+            .filter(|u| !u.is_alive)
+            .map(|u| rating(u))
+            .sum();
         let base = module
             .units
             .my_completed
             .iter()
             .filter(|u| u.get_type().is_resource_depot())
-            .next()
-            .unwrap()
-            .position();
+            .next();
+        if base.is_none() {
+            // TODO: Not this way...
+            return;
+        }
+        let base = base.unwrap().position();
+        // TODO: When is our base actually in danger?
+        let base_in_danger = enemies.iter().any(|it| {
+            // Overlords are not really a threat to our base
+            it.get_type().ground_weapon() != WeaponType::None
+                && it.position().distance_squared(base) < 300 * 300
+        });
+        let hysteresis = (engaged as i32) * enemy_dead / 5;
+        if base_in_danger {
+            self.target = base;
+        }
+        let go = base_in_danger || my_dead <= enemy_dead + hysteresis;
+        let vs = format!("atk: {go}: {my_dead} - {enemy_dead} (+ hyst: {hysteresis})",);
+        cvis().draw_text(
+            uc.vanguard.position().x,
+            uc.vanguard.position().y + 50,
+            vs.clone(),
+        );
         module
             .game
             .draw_text_map(uc.vanguard.position() + Position::new(0, 10), &vs);
+        cvis().draw_line(
+            uc.vanguard.position().x,
+            uc.vanguard.position().y,
+            self.target.x,
+            self.target.y,
+            Color::Blue,
+        );
         if !go {
             for u in uc.units {
                 if enemies.iter().any(|it| it.distance_to(*u) < 300) {
@@ -206,18 +198,18 @@ impl Squad {
         let solution = module.select_targets(uc, enemies, self.target, false);
         for (u, t) in solution {
             if let Some(target) = &t {
-                CVIS.lock().unwrap().draw_unit_pos_line(
-                    &u,
-                    target.position().x,
-                    target.position().y,
-                    Color::Red,
-                );
+                // CVIS.lock().unwrap().draw_unit_pos_line(
+                //     &u,
+                //     target.position().x,
+                //     target.position().y,
+                //     Color::Red,
+                // );
                 CVIS.lock().unwrap().draw_line(
                     u.position().x,
                     u.position().y,
                     target.position().x,
                     target.position().y,
-                    Color::White,
+                    Color::Red,
                 );
                 assert!(u.exists());
 
@@ -230,13 +222,13 @@ impl Squad {
                     u.stop();
                 }
             } else if !u.attacking() {
-                CVIS.lock().unwrap().draw_line(
-                    u.position().x,
-                    u.position().y,
-                    self.target.x,
-                    self.target.y,
-                    Color::Black,
-                );
+                // CVIS.lock().unwrap().draw_line(
+                //     u.position().x,
+                //     u.position().y,
+                //     self.target.x,
+                //     self.target.y,
+                //     Color::Black,
+                // );
                 u.attack_position(self.target);
             }
         }

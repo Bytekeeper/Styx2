@@ -197,10 +197,7 @@ impl MyModule {
         if !cluster.vanguard.flying() {
             target_units.retain(|unit| {
                 if !unit.flying() {
-                    let path = self.map.get_path(
-                        unit.position().to_walk_position(),
-                        target_position.to_walk_position(),
-                    );
+                    let path = self.map.get_path(unit.position(), target_position);
                     if !path.0.is_empty() {
                         dist_to_target_position.insert(unit, path.1);
                         if (path.1.saturating_sub(cluster.vanguard_dist_to_target)) > 700

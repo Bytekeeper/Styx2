@@ -216,7 +216,7 @@ impl MyModule {
         }
 
         // https://liquipedia.net/starcraft/Mining ~180 frames per trip
-        let dist_fn = |u: &SUnit, target: TilePosition| if u.carrying() { 180 } else { 0 } + self.map.get_path(u.target_position().unwrap_or(u.position()).to_walk_position(), target.to_walk_position()).1;
+        let dist_fn = |u: &SUnit, target: TilePosition| if u.carrying() { 180 } else { 0 } + self.map.get_path(u.target_position().unwrap_or(u.position()), target.center()).1;
         let (builder, build_tile_pos) = if param.unit_type.is_refinery() {
             self.units
                 .all()

@@ -35,12 +35,21 @@ impl MyModule {
             })
             .cloned()
             .collect();
+        // TODO take "last scouted time/frame" into account
         let mut location_targets: Vec<_> = self
             .game
             .get_start_locations()
             .iter()
             .filter(|l| !self.game.is_explored(**l))
             .cloned()
+            .collect();
+        // TODO maybe consider scouting enemy expansions first?
+        let mut potential_expansions: Vec<_> = self
+            .map
+            .bases
+            .iter()
+            .map(|b| b.position)
+            .filter(|l| !self.game.is_explored(*l))
             .collect();
         let my_base = self
             .units
@@ -52,8 +61,12 @@ impl MyModule {
             .tile_position();
 
         location_targets.sort_by_key(|b| b.distance_squared(my_base));
+        potential_expansions.sort_by_key(|b| b.distance_squared(my_base));
 
-        for base_loc in location_targets {
+        for &base_loc in location_targets
+            .iter()
+            .chain(potential_expansions.iter().take(2))
+        {
             let base_position = base_loc.to_position();
             let best_scout = scouts
                 .iter()

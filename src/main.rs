@@ -153,7 +153,21 @@ impl MyModule {
 
         if !self.units.enemy.iter().any(|e| e.get_type().is_building()) {
             self.scout(ScoutParams::default());
-            let target = self.units.enemy.iter().map(|u| u.position()).next();
+            let base = self
+                .units
+                .my_completed
+                .iter()
+                .filter(|u| u.get_type().is_resource_depot())
+                .next() // TODO What if we lost our depot?
+                .unwrap();
+            let target = self
+                .units
+                .enemy
+                .iter()
+                .filter(|u| u.get_type().is_building())
+                .min_by_key(|u| self.map.get_path(u.position(), base.position()).1)
+                .map(|u| u.position());
+
             if let Some(target) = target {
                 let attackers: Vec<_> = self
                     .tracker
@@ -178,6 +192,13 @@ impl MyModule {
                 }
             }
         } else {
+            let base = self
+                .units
+                .my_completed
+                .iter()
+                .filter(|u| u.get_type().is_resource_depot())
+                .next() // TODO What if we lost our depot?
+                .unwrap();
             let target = self
                 .units
                 .enemy
@@ -185,6 +206,12 @@ impl MyModule {
                 .find(|u| u.get_type().is_building())
                 .map(|u| u.position())
                 .unwrap();
+            // let mut x = target;
+            // let mut path = self.map.get_path(base.position(), target).0;
+            // while let Some(next) = path.pop().map(|it| it.top.center()) {
+            //     cvis().draw_line(next.x, next.y, x.x, x.y, Color::Purple);
+            //     x = next;
+            // }
             let attackers: Vec<_> = self
                 .units
                 .my_completed
@@ -246,12 +273,7 @@ impl MyModule {
             if unit.flying() {
                 unit.position().distance(target)
             } else {
-                self.map
-                    .get_path(
-                        unit.position().to_walk_position(),
-                        target.to_walk_position(),
-                    )
-                    .1 as f64
+                self.map.get_path(unit.position(), target).1 as f64
             } + 48.0
             // Some small buffer for acceleration/deceleration and obstacle avoidance
         ) / unit.get_type().top_speed()) as u32

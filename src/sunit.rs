@@ -21,6 +21,24 @@ pub struct Units {
     pub enemy: Vec<SUnit>,
 }
 
+pub fn stop_frames(unit_type: UnitType) -> i32 {
+    match unit_type {
+        UnitType::Terran_Goliath
+        | UnitType::Terran_Siege_Tank_Tank_Mode
+        | UnitType::Terran_Siege_Tank_Siege_Mode
+        | UnitType::Protoss_Reaver => 1,
+        UnitType::Terran_Ghost | UnitType::Zerg_Hydralisk => 3,
+        UnitType::Protoss_Arbiter | UnitType::Zerg_Zergling => 4,
+        UnitType::Protoss_Zealot | UnitType::Protoss_Dragoon => 7,
+        UnitType::Terran_Marine | UnitType::Terran_Firebat | UnitType::Protoss_Corsair => 8,
+        UnitType::Protoss_Dark_Templar | UnitType::Zerg_Devourer => 9,
+        UnitType::Zerg_Ultralisk => 14,
+        UnitType::Protoss_Archon => 15,
+        UnitType::Terran_Valkyrie => 40,
+        _ => 2,
+    }
+}
+
 impl Units {
     pub fn new(game: &Game, players: &Players) -> Self {
         let mut result = Units::default();
@@ -187,6 +205,26 @@ impl SUnit {
         }
     }
 
+    pub fn ensnare_timer(&self) -> i32 {
+        self.inner.borrow().ensnare_timer
+    }
+
+    pub fn lockdown_timer(&self) -> i32 {
+        self.inner.borrow().lockdown_timer
+    }
+
+    pub fn stasis_timer(&self) -> i32 {
+        self.inner.borrow().stasis_timer
+    }
+
+    pub fn stim_timer(&self) -> i32 {
+        self.inner.borrow().stim_timer
+    }
+
+    pub fn elevation_level(&self) -> i32 {
+        self.inner.borrow().elevation_level
+    }
+
     pub fn missing(&self) -> bool {
         self.inner.borrow().missing
     }
@@ -342,6 +380,10 @@ impl SUnit {
         self.unit.get_distance(&o.borrow().unit)
     }
 
+    pub fn energy(&self) -> i32 {
+        self.inner.borrow().energy
+    }
+
     pub fn hit_points(&self) -> i32 {
         self.inner.borrow().hit_points
     }
@@ -377,6 +419,7 @@ impl SUnit {
     }
 
     pub fn is_in_weapon_range(&self, other: &SUnit) -> bool {
+        // TODO Is there really a marine in the bunker?
         if self.inner.borrow().type_ == UnitType::Terran_Bunker {
             let wpn = UnitType::Terran_Marine.ground_weapon();
 
@@ -468,6 +511,10 @@ impl SUnit {
         self.inner.borrow().order
     }
 
+    pub fn plagued(&self) -> bool {
+        self.inner.borrow().is_plagued
+    }
+
     pub fn visible(&self) -> bool {
         self.inner.borrow().is_visible
     }
@@ -543,6 +590,21 @@ impl SUnit {
     pub fn top_speed(&self) -> f64 {
         // TODO modify by upgrades
         self.get_type().top_speed()
+    }
+
+    pub fn has_speed_upgrade(&self) -> bool {
+        let upgrade_type = match self.get_type() {
+            UnitType::Zerg_Zergling => UpgradeType::Metabolic_Boost,
+            UnitType::Zerg_Hydralisk => UpgradeType::Muscular_Augments,
+            UnitType::Zerg_Overlord => UpgradeType::Pneumatized_Carapace,
+            UnitType::Zerg_Ultralisk => UpgradeType::Anabolic_Synthesis,
+            UnitType::Protoss_Shuttle => UpgradeType::Gravitic_Thrusters,
+            UnitType::Protoss_Observer => UpgradeType::Gravitic_Boosters,
+            UnitType::Protoss_Zealot => UpgradeType::Leg_Enhancements,
+            UnitType::Terran_Vulture => UpgradeType::Ion_Thrusters,
+            _ => return false,
+        };
+        self.player().player.get_upgrade_level(upgrade_type) > 0
     }
 
     pub fn predict_position(&self, frames: i32) -> Position {
@@ -677,6 +739,7 @@ pub struct UnitInfo {
     pub is_training: bool,
     pub is_constructing: bool,
     pub is_visible: bool,
+    pub is_plagued: bool,
     pub last_seen: i32,
     pub last_attack_frame: i32,
     pub last_command_frame: i32,
@@ -685,6 +748,7 @@ pub struct UnitInfo {
     pub player: Resolvable<PlayerId, SPlayer>,
     pub is_flying: bool,
     pub hit_points: i32,
+    pub energy: i32,
     pub shields: i32,
     // Not at expected position when last checked
     pub missing: bool,
@@ -707,6 +771,11 @@ pub struct UnitInfo {
     pub interruptible: bool,
     pub target_position: Option<Position>,
     pub remaining_build_time: i32,
+    pub elevation_level: i32,
+    pub stim_timer: i32,
+    pub stasis_timer: i32,
+    pub lockdown_timer: i32,
+    pub ensnare_timer: i32,
     pub stuck_frames: i32,
 }
 
@@ -745,6 +814,7 @@ impl UnitInfo {
             is_training: unit.is_training(),
             is_constructing: unit.is_constructing(),
             is_visible: unit.is_visible(),
+            is_plagued: unit.is_plagued(),
             last_seen: game.get_frame_count(),
             last_attack_frame: if cooldown > 0 {
                 game.get_frame_count()
@@ -752,6 +822,7 @@ impl UnitInfo {
                 -1 // Well, not really - but we won't care for enemies for the first few seconds
             },
             is_powered: unit.is_powered(),
+            // TODO What if it's a Bunker?
             ground_weapon: Weapon {
                 max_range: player.weapon_max_range(unit.get_type().ground_weapon()),
                 max_hits: unit.get_type().max_ground_hits(),
@@ -760,6 +831,7 @@ impl UnitInfo {
                 damage: player.damage(unit.get_type().ground_weapon())
                     * unit.get_type().max_ground_hits(),
             },
+            // TODO What if it's a Bunker?
             air_weapon: Weapon {
                 max_range: player.weapon_max_range(unit.get_type().air_weapon()),
                 max_hits: unit.get_type().max_air_hits(),
@@ -772,6 +844,7 @@ impl UnitInfo {
             player: player.into(),
             is_flying: unit.is_flying(),
             hit_points: unit.get_hit_points(),
+            energy: unit.get_energy(),
             shields: unit.get_shields(),
             exists: unit.exists(),
             is_being_healed: unit.is_being_healed(),
@@ -796,6 +869,11 @@ impl UnitInfo {
             interruptible: unit.is_interruptible(),
             target_position: unit.get_target_position(),
             remaining_build_time: unit.get_remaining_build_time(),
+            elevation_level: game.get_ground_height(unit.get_tile_position()),
+            stim_timer: unit.get_stim_timer(),
+            stasis_timer: unit.get_stasis_timer(),
+            lockdown_timer: unit.get_lockdown_timer(),
+            ensnare_timer: unit.get_ensnare_timer(),
             stuck_frames: 0,
         }
     }
