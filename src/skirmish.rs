@@ -1,3 +1,4 @@
+use crate::cherry_vis::*;
 use crate::cluster::*;
 use crate::combat_sim::*;
 use std::rc::Rc;
@@ -51,8 +52,23 @@ impl Skirmishes {
                 player_b: sim_attack.player_b.clone(),
             };
             // TODO 8 secs ok? More, less, stacked?
-            sim_attack.simulate_for(8 * 24);
+            let frames = sim_attack.simulate_for(8 * 24);
             sim_flee.simulate_for(8 * 24);
+            cvis().log(format!(
+                "f:{frames}\n{}\nvs\n{}",
+                sim_attack
+                    .player_a
+                    .agents
+                    .iter()
+                    .map(|a| format!("{:?}:{} a:{}\n", a.unit_type, a.id, a.is_alive))
+                    .collect::<String>(),
+                sim_attack
+                    .player_b
+                    .agents
+                    .iter()
+                    .map(|a| format!("{:?}:{} a:{}\n", a.unit_type, a.id, a.is_alive))
+                    .collect::<String>()
+            ));
 
             let my_dead_after_fleeing: i32 = sim_flee
                 .player_a

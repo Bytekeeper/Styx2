@@ -122,12 +122,13 @@ impl MyModule {
             .tracker
             .available_units
             .iter()
+            // TODO implement mineral locking
             .filter(|u| u.get_type().is_worker() && !u.gathering_minerals())
             .filter_map(|u| {
-                let m = minerals
-                    .iter()
-                    .enumerate()
-                    .min_by_key(|(_, m)| m.position().distance_squared(u.position()));
+                let m = minerals.iter().enumerate().min_by_key(|(_, m)| {
+                    m.position().distance_squared(u.position())
+                        + if m.being_gathered() { 90 } else { 0 }
+                });
                 if let Some((i, &m)) = m {
                     minerals.swap_remove(i);
                     Some((u, m))

@@ -127,7 +127,7 @@ impl Units {
                 .cloned()
                 .collect(),
         );
-        self.clusters = dbscan(&self.all_rstar, 400, 3)
+        self.clusters = dbscan(&self.all_rstar, 400, 4)
             .into_iter()
             .map(Rc::new)
             .collect();
@@ -524,6 +524,10 @@ impl SUnit {
             || self.inner.borrow().gathering_gas
     }
 
+    pub fn being_gathered(&self) -> bool {
+        self.inner.borrow().being_gathered
+    }
+
     pub fn carrying_minerals(&self) -> bool {
         let inner = self.inner.borrow();
         inner.carrying_minerals
@@ -752,6 +756,7 @@ pub struct UnitInfo {
     pub carrying_minerals: bool,
     gathering_minerals: bool,
     gathering_gas: bool,
+    being_gathered: bool,
     pub ground_weapon: Weapon,
     pub air_weapon: Weapon,
     pub burrowed: bool,
@@ -829,6 +834,7 @@ impl UnitInfo {
             carrying_minerals: unit.is_carrying_minerals(),
             gathering_minerals: unit.is_gathering_minerals(),
             gathering_gas: unit.is_gathering_gas(),
+            being_gathered: unit.is_being_gathered(),
             burrowed: unit.is_burrowed(),
             order_target: unit.get_order_target().into(),
             target: unit.get_target().into(),

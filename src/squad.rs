@@ -58,10 +58,11 @@ impl Squad {
             .collect();
 
         for unit in fall_backers.iter() {
-            if enemies
-                .iter()
-                .any(|e| e.has_weapon_against(unit) && e.distance_to(*unit) < 300)
-            {
+            if enemies.iter().any(|e| {
+                e.has_weapon_against(unit)
+                    && e.distance_to(*unit) < 300
+                    && unit.position().distance_squared(base) > 300 * 300
+            }) {
                 unit.move_to(base);
             }
         }

@@ -9,7 +9,8 @@ rm -rf ~/.scbw/games/GAME_TEST
  # scbw.play --headless --bots 'NLPRbot' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
  #scbw.play --headless --bots 'CUBOT' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
  scbw.play --headless --bots 'Microwave' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
- #scbw.play --headless --bots 'Steamhammer' styx_z --map 'sscai/(4)FightingSpirit.scx' --game_name TEST --timeout_at_frame 30000 || true
+ # scbw.play --headless --bots 'Stardust' styx_z --map 'sscai/(4)FightingSpirit.scx' --game_name TEST --timeout_at_frame 30000 || true
+ # scbw.play --headless --bots 'Steamhammer' styx_z --map 'sscai/(4)FightingSpirit.scx' --game_name TEST --timeout_at_frame 30000 || true
  # scbw.play --headless --bots 'WuliBot' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
   #scbw.play --headless --bots 'Ecgberht' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
 # scbw.play --headless --bots MadMixZ styx_z --game_name TEST

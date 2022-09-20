@@ -157,80 +157,50 @@ impl MyModule {
 
         if !self.units.enemy.iter().any(|e| e.get_type().is_building()) {
             self.scout(ScoutParams::default());
-            let base = self
-                .units
-                .my_completed
-                .iter()
-                .filter(|u| u.get_type().is_resource_depot())
-                .next() // TODO What if we lost our depot?
-                .unwrap();
-            let target = self
-                .units
-                .enemy
-                .iter()
-                .filter(|u| u.get_type().is_building())
-                .min_by_key(|u| self.map.get_path(u.position(), base.position()).1)
-                .map(|u| u.position());
-
-            if let Some(target) = target {
-                let attackers: Vec<_> = self
-                    .tracker
-                    .available_units
-                    .iter()
-                    .filter(|u| {
-                        u.get_type().can_attack()
-                            && u.get_type().can_move()
-                            && !u.get_type().is_worker()
-                    })
-                    .cloned()
-                    .collect();
-                if !attackers.is_empty() {
-                    self.tracker
-                        .available_units
-                        .retain(|it| !attackers.contains(it));
-                    Squad { target }.update(self);
-                }
-            }
+        }
+        let base = self
+            .units
+            .my_completed
+            .iter()
+            .filter(|u| u.get_type().is_resource_depot())
+            .next(); // TODO What if we lost our depot?
+        let base = if let Some(base) = base {
+            base
         } else {
-            let base = self
-                .units
-                .my_completed
-                .iter()
-                .filter(|u| u.get_type().is_resource_depot())
-                .next(); // TODO What if we lost our depot?
-            let base = if let Some(base) = base {
-                base
-            } else {
-                anyhow::bail!("No base");
-            };
-            let target = self
-                .units
-                .enemy
-                .iter()
-                .filter(|u| u.get_type().is_building())
-                .min_by_key(|u| self.map.get_path(base.position(), u.position()).1)
-                .map(|u| u.position())
-                .unwrap();
-            // let mut x = target;
-            // let mut path = self.map.get_path(base.position(), target).0;
-            // while let Some(next) = path.pop().map(|it| it.top.center()) {
-            //     cvis().draw_line(next.x, next.y, x.x, x.y, Color::Purple);
-            //     x = next;
-            // }
-            let attackers: Vec<_> = self
-                .units
-                .my_completed
-                .iter()
-                .filter(|u| {
-                    u.get_type().can_attack()
-                        && u.get_type().can_move()
-                        && !u.get_type().is_worker()
-                })
-                .cloned()
-                .collect();
-            if !attackers.is_empty() {
-                Squad { target }.update(self);
-            }
+            anyhow::bail!("No base");
+        };
+        let target = self
+            .units
+            .enemy
+            .iter()
+            .filter(|u| u.get_type().is_building())
+            .min_by_key(|u| {
+                self.map.get_path(base.position(), u.position()).1
+                    + if u.get_type().is_resource_depot() {
+                        0
+                    } else {
+                        300
+                    }
+            })
+            .map(|u| u.position())
+            .unwrap_or(base.position());
+        // let mut x = target;
+        // let mut path = self.map.get_path(base.position(), target).0;
+        // while let Some(next) = path.pop().map(|it| it.top.center()) {
+        //     cvis().draw_line(next.x, next.y, x.x, x.y, Color::Purple);
+        //     x = next;
+        // }
+        let attackers: Vec<_> = self
+            .units
+            .my_completed
+            .iter()
+            .filter(|u| {
+                u.get_type().can_attack() && u.get_type().can_move() && !u.get_type().is_worker()
+            })
+            .cloned()
+            .collect();
+        if !attackers.is_empty() {
+            Squad { target }.update(self);
         }
 
         Ok(())

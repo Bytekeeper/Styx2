@@ -29,21 +29,24 @@ pub fn dbscan(elements: &RTree<SUnit>, eps: i32, min_pts: usize) -> Vec<Cluster>
         }
         c += 1;
         label.insert(element, c);
-        let mut i = 0;
-        while i < neighbors.len() {
-            let q = neighbors[i];
-            i += 1;
+        while let Some(q) = neighbors.pop() {
             if label.get(&q).unwrap_or(&NOISE) == &NOISE {
                 label.insert(q, c);
 
+                let envelope = q.envelope();
                 let (lower, upper) = (envelope.lower(), envelope.upper());
-                neighbors.extend(
-                    elements.locate_in_envelope_intersecting(&AABB::from_corners(
+                let new_neighbors: Vec<_> = elements
+                    .locate_in_envelope_intersecting(&AABB::from_corners(
                         [lower[0] - eps, lower[1] - eps],
                         [upper[0] + eps, upper[1] + eps],
-                    )), // TODO maybe we can get away without this?
-                        // .filter(|u| u.position().distance_squared(element.position()) <= eps * eps),
-                );
+                    ))
+                    .collect();
+                if new_neighbors.len() >= min_pts {
+                    neighbors.extend(
+                        new_neighbors, // TODO maybe we can get away without this?
+                                       // .filter(|u| u.position().distance_squared(element.position()) <= eps * eps),
+                    );
+                }
             }
         }
     }
