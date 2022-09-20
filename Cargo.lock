@@ -969,6 +969,7 @@ dependencies = [
  "memchr",
  "num-traits",
  "rsbwapi",
+ "rstar",
  "serde",
  "serde_json",
  "serde_yaml",

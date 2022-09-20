@@ -4,12 +4,14 @@
 mod boids;
 mod build;
 mod cherry_vis;
+mod cluster;
 mod combat_sim;
 mod gathering;
 mod gms;
 mod micro;
 mod sbase;
 mod scouting;
+mod skirmish;
 mod splayer;
 mod squad;
 mod sunit;
@@ -25,6 +27,7 @@ use rsbwapi::sma::*;
 pub use rsbwapi::*;
 use sbase::*;
 use scouting::*;
+use skirmish::*;
 use splayer::*;
 use squad::*;
 use std::borrow::Cow;
@@ -50,6 +53,7 @@ impl FailureReason {
 pub struct MyModule {
     pub game: Game,
     pub units: Units,
+    pub skirmishes: Skirmishes,
     pub players: Players,
     pub tracker: Tracker,
     pub map: Map,
@@ -184,11 +188,7 @@ impl MyModule {
                     self.tracker
                         .available_units
                         .retain(|it| !attackers.contains(it));
-                    Squad {
-                        target,
-                        units: attackers,
-                    }
-                    .update(self);
+                    Squad { target }.update(self);
                 }
             }
         } else {
@@ -229,11 +229,7 @@ impl MyModule {
                 .cloned()
                 .collect();
             if !attackers.is_empty() {
-                Squad {
-                    target,
-                    units: attackers,
-                }
-                .update(self);
+                Squad { target }.update(self);
             }
         }
 
@@ -367,6 +363,7 @@ impl AiModule for MyModule {
             let me = self.game.self_().unwrap();
             self.players.update(&self.game);
             self.units.update(&self.game, &self.players);
+            self.skirmishes = Skirmishes::new(&self.units.clusters);
             self.tracker.unrealized.clear();
             self.tracker.available_units = self
                 .units
@@ -396,19 +393,43 @@ impl AiModule for MyModule {
                 u.unstick();
             }
 
+            for s in self.skirmishes.skirmishes.iter() {
+                let c = &s.cluster;
+                if c.units.is_empty() {
+                    dbg!("REALLY?");
+                    continue;
+                }
+                let mut iter = c.units.iter();
+                let head = iter.next().unwrap();
+                cvis().draw_text(
+                    head.position().x,
+                    head.position().y,
+                    format!("{}", s.combat_evaluation),
+                );
+                for next in iter {
+                    cvis().draw_line(
+                        next.position().x,
+                        next.position().y,
+                        head.position().x,
+                        head.position().y,
+                        Color::Brown,
+                    );
+                }
+            }
+
             // self.opening_13_pool_muta();
             self.opening_styx();
             // self.opening_10hatch();
             // self.opening_9poolspire();
             self.ensure_gathering_minerals();
             // dbg!("CP: {}", self.map.choke_points.len());
-            for cp in &self.map.choke_points {
-                for wp in &cp.walk_positions {
-                    let p = wp.to_position();
-                    // CVIS.lock().unwrap().draw_circle(p.x, p.y, 4, Color::Yellow);
-                    game.draw_circle_map(p, 4, Color::Blue, false);
-                }
-            }
+            // for cp in &self.map.choke_points {
+            //     for wp in &cp.walk_positions {
+            //         let p = wp.to_position();
+            //         // CVIS.lock().unwrap().draw_circle(p.x, p.y, 4, Color::Yellow);
+            //         game.draw_circle_map(p, 4, Color::Blue, false);
+            //     }
+            // }
             Ok(())
         })()
         .unwrap();
@@ -423,8 +444,6 @@ fn main() {
         players: Default::default(),
         tracker: Tracker::default(),
         map: Map::new(game),
-        // game_count: 0,
-        // units: Units::new(&game),
-        // grids: Grids::new(),
+        skirmishes: Default::default(),
     });
 }

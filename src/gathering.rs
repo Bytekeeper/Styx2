@@ -87,7 +87,9 @@ impl MyModule {
             remaining_required = remaining_required.saturating_sub(gas_workers.len() * 8);
             remaining_workers = remaining_workers.saturating_sub(gas_workers.len());
             for w in gas_workers {
-                if !w.carrying() && w.target().as_ref() != Some(refinery) || !w.gathering_gas() {
+                if (!w.gathering() || !w.carrying()) && w.target().as_ref() != Some(refinery)
+                    || !w.gathering_gas()
+                {
                     w.gather(refinery).ok();
                 }
                 self.tracker.reserve_unit(&w);
@@ -134,7 +136,7 @@ impl MyModule {
                 }
             })
         {
-            if !u.carrying() && u.target().as_ref() != Some(m) {
+            if (!u.gathering() || !u.carrying()) && u.target().as_ref() != Some(m) {
                 u.gather(m).ok();
             }
         }

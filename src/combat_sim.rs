@@ -174,12 +174,14 @@ impl Agent {
             detected,
             burrowed: unit.burrowed(),
             stasis_timer: unit.stasis_timer(),
-            sleep_timer: base.sleep_timer.max(if !unit.powered() {
-                // Just sleep throughout any sim if unpowered
-                std::i32::MAX
-            } else {
-                unit.lockdown_timer().max(unit.remaining_build_time())
-            }),
+            sleep_timer: base.sleep_timer.max(
+                if !unit.powered() || (unit.exists() && (unit.gathering() || unit.constructing())) {
+                    // Just sleep throughout any sim if unpowered, or busy otherwise
+                    std::i32::MAX
+                } else {
+                    unit.lockdown_timer().max(unit.remaining_build_time())
+                },
+            ),
             ensnare_timer: unit.ensnare_timer(),
             plague_damage_per_frame: I24F8::from_bits(if unit.plagued() {
                 (WeaponType::Plague.damage_amount() << 8) / 76
@@ -246,6 +248,7 @@ impl Agent {
             unit_type,
             attack_target_priority: match unit_type {
                 UnitType::Protoss_Interceptor => TargetingPriority::Low,
+                unit if !unit.can_attack() => TargetingPriority::Medium,
                 _ => TargetingPriority::Highest,
             },
             is_flyer: unit_type.is_flyer(),

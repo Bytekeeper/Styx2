@@ -1,10 +1,12 @@
 use crate::cherry_vis::CherryVisOutput;
+use crate::cluster::{dbscan, Cluster};
 use crate::splayer::*;
 use crate::MyModule;
 use crate::SupplyCounter;
 use crate::CVIS;
 use ahash::AHashMap;
 use rsbwapi::*;
+use rstar::{RTree, RTreeObject, AABB};
 use std::any::type_name;
 use std::borrow;
 use std::cell::Cell;
@@ -19,6 +21,8 @@ pub struct Units {
     pub my_completed: Vec<SUnit>,
     pub mine_all: Vec<SUnit>,
     pub enemy: Vec<SUnit>,
+    pub all_rstar: RTree<SUnit>,
+    pub clusters: Vec<Rc<Cluster>>,
 }
 
 pub fn stop_frames(unit_type: UnitType) -> i32 {
@@ -116,6 +120,17 @@ impl Units {
             .filter(|it| it.get_type().is_mineral_field())
             .cloned()
             .collect();
+        self.all_rstar = RTree::bulk_load(
+            self.all
+                .values()
+                .filter(|it| !it.missing() && !it.player().is_neutral())
+                .cloned()
+                .collect(),
+        );
+        self.clusters = dbscan(&self.all_rstar, 400, 3)
+            .into_iter()
+            .map(Rc::new)
+            .collect();
     }
 
     pub fn mark_dead(&mut self, unit: &Unit) {
@@ -165,6 +180,13 @@ impl SUnit {
 
     fn resolve(&self, units: &AHashMap<UnitId, SUnit>, players: &AHashMap<PlayerId, SPlayer>) {
         self.inner.borrow_mut().resolve(units, players);
+    }
+
+    pub fn dimensions(&self) -> Rectangle<Position> {
+        let inner = self.inner.borrow();
+        let tl = inner.position - (inner.type_.dimension_left(), inner.type_.dimension_up());
+        let br = inner.position + (inner.type_.dimension_right(), inner.type_.dimension_down());
+        Rectangle::new(tl, br)
     }
 
     pub fn id(&self) -> UnitId {
@@ -946,6 +968,15 @@ impl From<&UnitInfo> for Position {
 impl From<&SUnit> for UnitId {
     fn from(fu: &SUnit) -> Self {
         fu.id()
+    }
+}
+
+impl RTreeObject for SUnit {
+    type Envelope = AABB<[i32; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        let dim = self.dimensions();
+        AABB::from_corners([dim.tl.x, dim.tl.y], [dim.br.x, dim.br.y])
     }
 }
 

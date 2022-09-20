@@ -72,7 +72,8 @@ impl MyModule {
                 .iter()
                 .min_by_key(|u| {
                     self.estimate_frames_to(u, base_position)
-                        + u.tile_position().distance(base_loc) as u32
+                        // We sent someone else there before? Nudge the search to use the same unit
+                        + u.target_position().map(|p| p.distance(base_position) as u32 / 10).unwrap_or(0)
                 })
                 .cloned();
             if let Some(best_scout) = best_scout {
