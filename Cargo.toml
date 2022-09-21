@@ -21,6 +21,8 @@ zstd = { version = "0.11", optional = true }
 num-traits = "0.2"
 lazy_static = { version = "1.4.0" }
 rstar = "0.9"
+glam="0.21"
+ordered-float="3"
 
 [features]
 cvis = ["zstd", "serde_json"]

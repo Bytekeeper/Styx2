@@ -84,7 +84,6 @@ impl<T: Copy, const N: usize> Grid<T, N> {
 pub struct Grids {
     pub ground_threat: Grid<u16, 256>,
     pub air_threat: Grid<u16, 256>,
-    pub narrow_choke: Grid<bool, 256>,
 }
 
 impl Grids {
@@ -92,18 +91,16 @@ impl Grids {
         Self {
             ground_threat: Grid::new(0),
             air_threat: Grid::new(0),
-            narrow_choke: Grid::new(false),
         }
     }
 
     pub fn update(&mut self, units: &Units) {
         self.ground_threat.reset();
         self.air_threat.reset();
-        self.narrow_choke.reset();
-        for e in &units.enemy_units() {
-            let (x, y) = e.tile_position.into();
-            let range = (e.ground_weapon.max_range + 31) / 32;
-            if e.type_.ground_weapon() != WeaponType::None {
+        for e in &units.enemy {
+            let (x, y) = e.tile_position().into();
+            let range = (e.get_ground_weapon().max_range + 31) / 32;
+            if e.get_type().ground_weapon() != WeaponType::None {
                 self.ground_threat.modify_in_range(
                     x as usize,
                     y as usize,
@@ -111,7 +108,7 @@ impl Grids {
                     |i, _, _| i.unwrap_or(0) + 1,
                 );
             }
-            if e.type_.air_weapon() != WeaponType::None {
+            if e.get_type().air_weapon() != WeaponType::None {
                 self.air_threat.modify_in_range(
                     x as usize,
                     y as usize,

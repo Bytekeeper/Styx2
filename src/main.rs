@@ -1,6 +1,4 @@
 //
-// mod grid;
-//
 mod boids;
 mod build;
 mod cherry_vis;
@@ -8,6 +6,7 @@ mod cluster;
 mod combat_sim;
 mod gathering;
 mod gms;
+mod grid;
 mod micro;
 mod sbase;
 mod scouting;
@@ -68,6 +67,33 @@ impl MyModule {
     pub fn is_in_narrow_choke(&self, tp: TilePosition) -> bool {
         // TODO
         false
+    }
+
+    pub fn furthest_walkable_position(&self, from: Position, to: Position) -> Option<WalkPosition> {
+        let mut to = to.to_walk_position();
+        let from = from.to_walk_position();
+        let dx = (from.x - to.x).abs();
+        let dy = -(from.y - to.y).abs();
+        let sx = (to.x < from.x) as i32 * 2 - 1;
+        let sy = (to.y < from.y) as i32 * 2 - 1;
+        let mut err = dx + dy;
+        loop {
+            if to.is_valid(&&self.game) && self.game.is_walkable(to) {
+                return Some(to);
+            }
+            if to == from {
+                return None;
+            }
+            let e2 = 2 * err;
+            if e2 > dy {
+                err += dy;
+                to.x += sx
+            }
+            if e2 < dx {
+                err += dx;
+                to.y += sy
+            }
+        }
     }
 
     pub fn is_target_reachable_enemy_base(
@@ -374,17 +400,24 @@ impl AiModule for MyModule {
                 cvis().draw_text(
                     head.position().x,
                     head.position().y,
-                    format!("{}", s.combat_evaluation),
+                    format!("{} {:.2}", s.combat_evaluation, s.cluster.b),
                 );
-                for next in iter {
-                    cvis().draw_line(
-                        next.position().x,
-                        next.position().y,
-                        head.position().x,
-                        head.position().y,
-                        Color::Brown,
-                    );
-                }
+                // cvis().draw_line(
+                //     head.position().x - 30,
+                //     head.position().y - (30.0 * c.b) as i32,
+                //     head.position().x + 30,
+                //     head.position().y + (30.0 * c.b) as i32,
+                //     Color::White,
+                // );
+                // for next in iter {
+                //     cvis().draw_line(
+                //         next.position().x,
+                //         next.position().y,
+                //         head.position().x,
+                //         head.position().y,
+                //         Color::Brown,
+                //     );
+                // }
             }
 
             // self.opening_13_pool_muta();

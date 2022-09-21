@@ -318,7 +318,10 @@ impl MyModule {
                 .map(|tp| tp.distance_squared(build_pos) > 32 * 32)
                 .unwrap_or(true)
             {
-                builder.move_to(build_pos).ok();
+                // Now this is indirection: According to PurpleWave, McRave found the (0,-7) to
+                // reduce wiggling (smaller values than 7 seem to work fine too, maybe this
+                // requires a test?)
+                builder.move_to(build_pos - (0, 3)).ok();
             }
         } else {
             CVIS.lock().unwrap().draw_rect(

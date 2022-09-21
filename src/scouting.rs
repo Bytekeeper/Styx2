@@ -1,4 +1,6 @@
+use crate::boids::*;
 use crate::*;
+use rstar::AABB;
 
 #[derive(Copy, Clone)]
 pub struct ScoutParams {
@@ -82,7 +84,32 @@ impl MyModule {
                     UnitType::Zerg_Overlord => max_overlords -= 1,
                     _ => (),
                 }
-                best_scout.move_to(base_position);
+
+                let pos = best_scout.position();
+                let mut boid_forces: Vec<_> = self
+                    .units
+                    .all_rstar
+                    .locate_in_envelope_intersecting(&AABB::from_corners(
+                        [pos.x - 300, pos.y - 300],
+                        [pos.x + 300, pos.y + 300],
+                    ))
+                    .filter(|u| u.player().is_enemy() && u.has_weapon_against(&best_scout))
+                    .map(|e| {
+                        separation(
+                            &best_scout,
+                            e,
+                            128.0 + e.weapon_against(&best_scout).max_range as f32,
+                            1.0,
+                        )
+                    })
+                    .collect();
+                boid_forces.push(goal(&best_scout, base_position, 0.0, 1.0));
+                if boid_forces.iter().any(|it| it.weight > 0.1) {
+                    let target = self.positioning(&best_scout, &boid_forces);
+                    best_scout.move_to(target);
+                } else {
+                    best_scout.move_to(base_position);
+                }
                 scouts.retain(|s| {
                     s != &best_scout
                         && (!s.get_type().is_worker() || max_workers > 0)

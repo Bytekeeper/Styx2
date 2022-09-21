@@ -1,20 +1,16 @@
 #!/bin/bash -e 
 ./build.sh
 rm -rf ~/.scbw/games/GAME_TEST
-#scbw.play --headless --bots 'Hao Pan' styx_z --game_name TEST
-#scbw.play --headless --bots WillBot styx_z --game_name TEST
-# scbw.play --headless --bots 'Marine Hell' styx_z --map 'sscai/(2)HeartbreakRidge.scx' --game_name TEST --timeout_at_frame 30000 || true
-# scbw.play --headless --bots 'Marine Hell' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
-# scbw.play --headless --bots 'Slater' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
- # scbw.play --headless --bots 'NLPRbot' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
- #scbw.play --headless --bots 'CUBOT' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
- scbw.play --headless --bots 'Microwave' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
- # scbw.play --headless --bots 'Stardust' styx_z --map 'sscai/(4)FightingSpirit.scx' --game_name TEST --timeout_at_frame 30000 || true
- # scbw.play --headless --bots 'Steamhammer' styx_z --map 'sscai/(4)FightingSpirit.scx' --game_name TEST --timeout_at_frame 30000 || true
- # scbw.play --headless --bots 'WuliBot' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
-  #scbw.play --headless --bots 'Ecgberht' styx_z --map 'sscai/(4)Python.scx' --game_name TEST --timeout_at_frame 30000 || true
-# scbw.play --headless --bots MadMixZ styx_z --game_name TEST
-#scbw.play --headless --bots Ecgberht styx_z --game_name TEST
-cp ~/.scbw/games/GAME_TEST/player_0.rep ~/cherryvis-docker/replays/
-mkdir ~/cherryvis-docker/replays/player_0.rep.cvis || true
-cp -r ~/.scbw/games/GAME_TEST/write_1/cvis/* ~/cherryvis-docker/replays/player_0.rep.cvis/
+MAP='aiide/(4)Fortress.scx'
+# MAP='aiide/(4)Python.scx'
+BOT='Microwave'
+# BOT='Stardust'
+GAME_NAME="$BOT-$(expr \"$MAP\" : '.*)\([A-Za-z]*\).scx')"
+REPLAY_NAME="$GAME_NAME.rep"
+
+rm -rf ~/.scbw/games/GAME_"$GAME_NAME"
+scbw.play --headless --bots "$BOT" styx_z --map "$MAP" --game_name "$GAME_NAME" --timeout_at_frame 30000 || true
+
+cp ~/.scbw/games/GAME_"$GAME_NAME"/player_0.rep ~/cherryvis-docker/replays/"$REPLAY_NAME"
+mkdir ~/cherryvis-docker/replays/"$REPLAY_NAME".cvis 2>/dev/null || true
+cp -r ~/.scbw/games/"GAME_$GAME_NAME"/write_1/cvis/* ~/cherryvis-docker/replays/"$REPLAY_NAME".cvis/

@@ -60,10 +60,52 @@ pub fn dbscan(elements: &RTree<SUnit>, eps: i32, min_pts: usize) -> Vec<Cluster>
     for (k, v) in label.drain() {
         clusters[v - 1].units.push(k.clone());
     }
+    for c in clusters.iter_mut() {
+        c.units.sort_by_key(|u| u.position().x);
+        let my_units: Vec<_> = c.units.iter().filter(|u| u.player().is_me()).collect();
+        if my_units.is_empty() {
+            continue;
+        }
+        let n = my_units.len();
+        let avg_x = my_units.iter().map(|u| u.position().x).sum::<i32>() as f32 / n as f32;
+        let avg_y = my_units.iter().map(|u| u.position().y).sum::<i32>() as f32 / n as f32;
+        let avg_x2 = my_units
+            .iter()
+            .map(|u| u.position().x as f32 * u.position().x as f32)
+            .sum::<f32>()
+            / n as f32;
+        let avg_y2 = my_units
+            .iter()
+            .map(|u| u.position().y as f32 * u.position().y as f32)
+            .sum::<f32>()
+            / n as f32;
+        let s_x = (my_units
+            .iter()
+            .map(|u| (u.position().x as f32 - avg_x).powf(2.0))
+            .sum::<f32>()
+            / n as f32)
+            .sqrt();
+        let s_y = (my_units
+            .iter()
+            .map(|u| (u.position().y as f32 - avg_y).powf(2.0))
+            .sum::<f32>()
+            / n as f32)
+            .sqrt();
+        let avg_xy = my_units
+            .iter()
+            .map(|u| u.position().x as f32 * u.position().y as f32)
+            .sum::<f32>()
+            / n as f32;
+        let r_xy = (avg_xy - avg_x * avg_y)
+            / ((avg_x2 - avg_x.powf(2.0)) * (avg_y2 - avg_y.powf(2.0))).sqrt();
+        let b = r_xy * s_y / s_x;
+        c.b = b;
+    }
     clusters
 }
 
 #[derive(Clone, Default, Debug)]
 pub struct Cluster {
     pub units: Vec<SUnit>,
+    pub b: f32,
 }
