@@ -20,53 +20,52 @@ impl BuildParam {
 }
 
 impl MyModule {
-    pub fn do_extractor_trick(&mut self) -> Result<(), FailureReason> {
-        if self.tracker.available_gms.supply < 0 {
-            return Err(FailureReason::misc(
-                "Will need more than an extractor trick",
-            ));
-        }
-        if self.tracker.available_gms.supply > 0 {
-            return self.start_train(TrainParam::train(UnitType::Zerg_Drone));
-        }
-
-        if self
-            .units
-            .mine_all
-            .iter()
-            .any(|u| u.build_type().is_worker() && !u.completed())
-        {
-            for incomplete_refinery in self
+    pub fn do_extractor_trick(&mut self, build: UnitType) -> Result<(), FailureReason> {
+        assert!(build.supply_required() < 2);
+        // No supply left, cancel refinery if existing
+        if self.tracker.available_gms.supply <= 0 {
+            let refinery = self
                 .units
                 .mine_all
                 .iter()
                 .filter(|e| e.get_type().is_refinery() && !e.completed())
-            {
-                incomplete_refinery
-                    .cancel_morph()
-                    .map_err(|e| FailureReason::Bwapi(e));
-            }
-            // Done
-        } else if !self
-            .units
-            .mine_all
-            .iter()
-            .any(|u| u.get_type().is_refinery())
-        {
-            let mut price = UnitType::Zerg_Extractor.price() + UnitType::Zerg_Drone.price();
-            price.supply = 0;
-
-            if self.tracker.available_gms > price {
-                self.start_build(BuildParam::build(UnitType::Zerg_Extractor))?;
-                // We can't start training yet, but we need to save the minerals
-                self.tracker
-                    .available_gms
-                    .checked_sub(UnitType::Zerg_Drone.price());
+                .next();
+            let unit = self
+                .units
+                .mine_all
+                .iter()
+                .filter(|e| e.build_type() == build && !e.completed())
+                .next();
+            // We started the refinery?
+            if let Some(refinery) = refinery {
+                // Did we also get the unit to start?
+                if unit.is_some() {
+                    // Done
+                    return refinery
+                        .cancel_morph()
+                        .map(|_| ())
+                        .map_err(|e| FailureReason::Bwapi(e));
+                }
             } else {
-                self.tracker.available_gms.checked_sub(price);
+                // Or we need to build an refinery
+                let mut price = UnitType::Zerg_Extractor.price() + build.price();
+                price.supply = 0;
+
+                if self.tracker.available_gms > price {
+                    self.start_build(BuildParam::build(UnitType::Zerg_Extractor))?;
+                } else {
+                    self.tracker
+                        .available_gms
+                        .checked_sub(UnitType::Zerg_Extractor.price());
+                }
             }
         }
-        Ok(())
+        // Fall through to claim a unit
+        if self.tracker.available_gms.supply <= 2 {
+            self.start_train(TrainParam::train(build))
+        } else {
+            Err(FailureReason::misc("Not enough supply"))
+        }
     }
 
     pub fn ensure_building_count(
@@ -170,13 +169,38 @@ impl MyModule {
             "'{:?}' is not a building",
             param.unit_type
         );
+        assert!(
+            param.unit_type.price().gas <= 0.max(self.tracker.available_gms.gas)
+                || self.has_pending_or_ready(|ut| ut.is_refinery()),
+            "Not enough gas to build {:?}, and no refinery planned or built!",
+            param.unit_type
+        );
+        self.tracker.unrealized.push(UnrealizedItem::UnitType(
+            self.tracker.available_gms,
+            param.unit_type,
+        ));
         let base = if let Some(at) = param.at {
             at
         } else {
             self.units
                 .my_completed
                 .iter()
-                .find(|u| u.get_type().is_resource_depot() && u.completed())
+                .filter(|u| u.get_type().is_resource_depot() && u.completed())
+                // TODO Do proper hierarchical map analysis
+                .min_by_key(|u| {
+                    let min_dist_to_start_base = self
+                        .game
+                        .get_start_locations()
+                        .iter()
+                        .map(|loc| self.map.get_path(u.position(), loc.center()).1)
+                        .min()
+                        .unwrap() as i32;
+                    if param.unit_type == UnitType::Zerg_Creep_Colony {
+                        -min_dist_to_start_base
+                    } else {
+                        min_dist_to_start_base
+                    }
+                })
                 .map(|u| u.tile_position())
                 .ok_or(FailureReason::misc("No base found"))?
         };
@@ -191,14 +215,13 @@ impl MyModule {
         let order_build = self
             .tracker
             .available_gms
-            .checked_sub(param.unit_type.price())
-            && self.game.can_make(None, param.unit_type).unwrap_or(false);
+            .checked_sub(param.unit_type.price());
 
-        if order_build
-            && !self
-                .game
-                .can_make(None, param.unit_type)
-                .map_err(|e| FailureReason::misc(format!("{e:?}")))?
+        // TODO can_make should be a "when can I make" in frames
+        if !self
+            .game
+            .can_make(None, param.unit_type)
+            .map_err(|e| FailureReason::misc(format!("{e:?}")))?
         {
             return Err(FailureReason::misc("Tech not available"));
         }
@@ -244,25 +267,22 @@ impl MyModule {
                 })
                 .flatten()
                 .filter(|(b, p)| {
-                    // !self.units.all().iter().any(|it| {
-                    //     let planned_place = Rectangle::new(*p, *p + param.unit_type.tile_size());
-                    //     match it.get_type() {
-                    //         UnitType::Zerg_Extractor | UnitType::Resource_Vespene_Geyser => {
-                    //             Rectangle::new(
-                    //                 it.tile_position(),
-                    //                 it.tile_position() + it.get_type().tile_size(),
-                    //             )
-                    //             .extrude(1)
-                    //             .intersects(planned_place)
-                    //         }
-                    //         _ => false,
-                    //     }
-                    // }) &&
                     self.game
                         .can_build_here(&b.unit, *p, param.unit_type, false)
                         .unwrap_or(false)
                 })
-                .min_by_key(|(_, p)| p.distance_squared(base))
+                .min_by_key(|(_, p)| {
+                    if param.unit_type == UnitType::Zerg_Creep_Colony {
+                        self.map
+                            .choke_points
+                            .iter()
+                            .map(|cp| p.distance_squared(cp.top.to_tile_position()))
+                            .min()
+                            .unwrap()
+                    } else {
+                        p.distance_squared(base)
+                    }
+                })
                 .ok_or(FailureReason::misc("No build location found"))?
         };
         let dim = Position::new(
@@ -272,7 +292,8 @@ impl MyModule {
 
         let build_pos =
             build_tile_pos.to_position() + param.unit_type.tile_size().to_position() / 2;
-        let frames_to_start_build = self.estimate_frames_to(&builder, build_pos);
+        // Account for some worker wiggling
+        let frames_to_start_build = self.estimate_frames_to(&builder, build_pos) + 48;
         let future_gms = available_gms + self.estimate_gms(frames_to_start_build, 1);
         // CVIS.lock().unwrap().log_unit_frame(
         //     &builder,
@@ -323,6 +344,30 @@ impl MyModule {
                 // requires a test?)
                 builder.move_to(build_pos - (0, 3)).ok();
             }
+            let mut p = builder.position();
+            let mut li: Option<usize> = None;
+            for cp in self.map.get_path(builder.position(), build_pos).0 {
+                let top = cp.top.center();
+                cvis().draw_line(p.x, p.y, top.x, top.y, Color::Green);
+                if let Some(index) = li {
+                    let d: u32 = self.map.distances[index][cp.index];
+                    cvis().draw_text((p.x + top.x) / 2, (p.y + top.y) / 2, format!("d: {}", d));
+                } else {
+                    cvis().draw_text(
+                        (p.x + top.x) / 2,
+                        (p.y + top.y) / 2,
+                        format!("d: {:.2}", top.distance(p)),
+                    );
+                }
+                li = Some(cp.index);
+                p = top;
+            }
+            cvis().draw_line(p.x, p.y, build_pos.x, build_pos.y, Color::Green);
+            cvis().draw_text(
+                (p.x + build_pos.x) / 2,
+                (p.y + build_pos.y) / 2,
+                format!("d: {:.2}", build_pos.distance(p)),
+            );
         } else {
             CVIS.lock().unwrap().draw_rect(
                 build_pos.x - param.unit_type.dimension_left(),

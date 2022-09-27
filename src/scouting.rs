@@ -6,6 +6,7 @@ use rstar::AABB;
 pub struct ScoutParams {
     pub max_workers: i32,
     pub max_overlords: i32,
+    pub max_scouts: i32,
 }
 
 impl Default for ScoutParams {
@@ -13,15 +14,30 @@ impl Default for ScoutParams {
         Self {
             max_workers: 0,
             max_overlords: 99999,
+            max_scouts: 20,
         }
     }
 }
 
 impl MyModule {
-    pub fn scout(&mut self, params: ScoutParams) -> Result<(), FailureReason> {
+    pub fn scout_target(&self, from: TilePosition) -> Option<TilePosition> {
+        self.game
+            .get_start_locations()
+            .iter()
+            .filter(|l| !self.game.is_explored(**l))
+            .min_by_key(|p| p.distance_squared(from))
+            .cloned()
+    }
+
+    pub fn perform_scouting(&mut self, params: ScoutParams) -> Result<(), FailureReason> {
+        // TODO A bit too simplistic
+        if self.units.enemy.iter().any(|e| e.get_type().is_building()) {
+            return Ok(());
+        }
         let ScoutParams {
             mut max_workers,
             mut max_overlords,
+            mut max_scouts,
         } = params;
         let mut scouts: Vec<_> = self
             .tracker
@@ -65,10 +81,7 @@ impl MyModule {
         location_targets.sort_by_key(|b| b.distance_squared(my_base));
         potential_expansions.sort_by_key(|b| b.distance_squared(my_base));
 
-        for &base_loc in location_targets
-            .iter()
-            .chain(potential_expansions.iter().take(2))
-        {
+        for &base_loc in location_targets.iter().chain(potential_expansions.iter()) {
             let base_position = base_loc.to_position();
             let best_scout = scouts
                 .iter()
@@ -85,37 +98,42 @@ impl MyModule {
                     _ => (),
                 }
 
-                let pos = best_scout.position();
-                let mut boid_forces: Vec<_> = self
-                    .units
-                    .all_rstar
-                    .locate_in_envelope_intersecting(&AABB::from_corners(
-                        [pos.x - 300, pos.y - 300],
-                        [pos.x + 300, pos.y + 300],
-                    ))
-                    .filter(|u| u.player().is_enemy() && u.has_weapon_against(&best_scout))
-                    .map(|e| {
-                        separation(
-                            &best_scout,
-                            e,
-                            128.0 + e.weapon_against(&best_scout).max_range as f32,
-                            1.0,
-                        )
-                    })
-                    .collect();
-                boid_forces.push(goal(&best_scout, base_position, 0.0, 1.0));
-                if boid_forces.iter().any(|it| it.weight > 0.1) {
-                    let target = self.positioning(&best_scout, &boid_forces);
-                    best_scout.move_to(target);
-                } else {
-                    best_scout.move_to(base_position);
-                }
+                // let pos = best_scout.position();
+                // let mut boid_forces: Vec<_> = self
+                //     .units
+                //     .all_rstar
+                //     .locate_in_envelope_intersecting(&AABB::from_corners(
+                //         [pos.x - 300, pos.y - 300],
+                //         [pos.x + 300, pos.y + 300],
+                //     ))
+                //     .filter(|u| u.player().is_enemy() && u.has_weapon_against(&best_scout))
+                //     .map(|e| {
+                //         separation(
+                //             &best_scout,
+                //             e,
+                //             128.0 + e.weapon_against(&best_scout).max_range as f32,
+                //             1.0,
+                //         )
+                //     })
+                //     .collect();
+                // if boid_forces.iter().any(|it| it.weight > 0.1) {
+                //     // boid_forces.push(follow_path(self, &best_scout, base_position, 0.3));
+                //     boid_forces.push(climb(self, &best_scout, 32, 32, 2.0));
+                //     let target = self.positioning(&best_scout, &boid_forces);
+                //     best_scout.move_to(target);
+                // } else {
+                best_scout.move_to(base_position);
+                // }
                 scouts.retain(|s| {
                     s != &best_scout
                         && (!s.get_type().is_worker() || max_workers > 0)
                         && (s.get_type() != UnitType::Zerg_Overlord || max_overlords > 0)
                 });
                 self.tracker.reserve_unit(&best_scout);
+                max_scouts -= 1;
+                if max_scouts <= 0 {
+                    break;
+                }
             } else {
                 break;
             }

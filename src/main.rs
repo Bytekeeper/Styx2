@@ -4,6 +4,7 @@ mod build;
 mod cherry_vis;
 mod cluster;
 mod combat_sim;
+mod duration;
 mod gathering;
 mod gms;
 mod grid;
@@ -35,6 +36,12 @@ use targeting::*;
 use tracker::*;
 use train::*;
 use upgrade::*;
+
+#[derive(Default)]
+pub struct AttackParams {
+    all_in: bool,
+    min_army: usize,
+}
 
 #[derive(Debug)]
 pub enum FailureReason {
@@ -70,28 +77,30 @@ impl MyModule {
     }
 
     pub fn furthest_walkable_position(&self, from: Position, to: Position) -> Option<WalkPosition> {
-        let mut to = to.to_walk_position();
-        let from = from.to_walk_position();
-        let dx = (from.x - to.x).abs();
-        let dy = -(from.y - to.y).abs();
-        let sx = (to.x < from.x) as i32 * 2 - 1;
-        let sy = (to.y < from.y) as i32 * 2 - 1;
+        let to = to.to_walk_position();
+        let mut from = from.to_walk_position();
+        let mut last = None;
+        let dx = (to.x - from.x).abs();
+        let dy = -(to.y - from.y).abs();
+        let sx = (from.x < to.x) as i32 * 2 - 1;
+        let sy = (from.y < to.y) as i32 * 2 - 1;
         let mut err = dx + dy;
         loop {
-            if to.is_valid(&&self.game) && self.game.is_walkable(to) {
-                return Some(to);
+            if !from.is_valid(&&self.game) || !self.game.is_walkable(from) {
+                return last;
             }
+            last = Some(from);
             if to == from {
-                return None;
+                return last;
             }
             let e2 = 2 * err;
             if e2 > dy {
                 err += dy;
-                to.x += sx
+                from.x += sx
             }
             if e2 < dx {
                 err += dx;
-                to.y += sy
+                from.y += sy
             }
         }
     }
@@ -147,18 +156,130 @@ impl MyModule {
                 .any(|u| matches!(u, UnrealizedItem::UnitType(_, ut) if check(*ut)))
     }
 
-    pub fn count_pending_or_ready(&self, check: impl Fn(UnitType) -> bool) -> usize {
+    pub fn count_completed(&self, check: impl Fn(UnitType) -> bool) -> usize {
         self.units
+            .my_completed
+            .iter()
+            .filter(|it| check(it.get_type()))
+            .count()
+    }
+
+    pub fn count_pending_or_ready(&self, check: impl Fn(UnitType) -> bool) -> usize {
+        let count_check = |t| {
+            if check(t) {
+                1 + t.is_two_units_in_one_egg() as usize
+            } else {
+                0
+            }
+        };
+        let result = self
+            .units
             .mine_all
             .iter()
-            .filter(|u| check(u.build_type()) || check(u.get_type()))
-            .count()
+            .map(|u| count_check(u.build_type()) + check(u.get_type()) as usize)
+            .sum::<usize>()
             + self
                 .tracker
                 .unrealized
                 .iter()
-                .filter(|u| matches!(u, UnrealizedItem::UnitType(_, ut) if check(*ut)))
-                .count()
+                .map(|u| match u {
+                    UnrealizedItem::UnitType(_, ut) => count_check(*ut),
+                    _ => 0,
+                })
+                .sum::<usize>();
+        result
+    }
+
+    fn three_hatch_spire(&mut self) -> anyhow::Result<()> {
+        self.ensure_unit_count(UnitType::Zerg_Drone, 9);
+        self.ensure_unit_count(UnitType::Zerg_Overlord, 2);
+        self.ensure_unit_count(UnitType::Zerg_Drone, 10);
+        if self.count_pending_or_ready(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) < 2 {
+            self.ensure_unit_count(UnitType::Zerg_Drone, 12);
+        }
+        self.ensure_base_count(2);
+        self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
+        if self.count_pending_or_ready(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) < 3 {
+            self.ensure_unit_count(UnitType::Zerg_Drone, 13);
+        }
+        self.ensure_base_count(3);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 6);
+        self.ensure_unit_count(UnitType::Zerg_Drone, 13);
+        self.ensure_building_count(UnitType::Zerg_Extractor, 1);
+        self.ensure_unit_count(UnitType::Zerg_Overlord, 3);
+        self.ensure_building_count(UnitType::Zerg_Lair, 1);
+        self.ensure_building_count(UnitType::Zerg_Spire, 1);
+        self.ensure_building_count(UnitType::Zerg_Hatchery, 4);
+
+        self.ensure_gathering_gas(GatherParams {
+            ..Default::default()
+        });
+        Ok(())
+    }
+
+    fn four_pool(&mut self) -> anyhow::Result<()> {
+        if self.tracker.available_gms.supply >= 0 && self.tracker.available_gms.supply <= 2 {
+            self.do_extractor_trick(UnitType::Zerg_Zergling);
+        }
+        self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
+        self.ensure_free_supply(2);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 100);
+
+        self.perform_scouting(ScoutParams {
+            max_workers: 0,
+            ..ScoutParams::default()
+        });
+        self.perform_attacking(AttackParams {
+            all_in: true,
+            ..Default::default()
+        });
+
+        Ok(())
+    }
+
+    fn five_pool(&mut self) -> anyhow::Result<()> {
+        if self.tracker.available_gms.supply >= 0 && self.tracker.available_gms.supply <= 2 {
+            self.do_extractor_trick(UnitType::Zerg_Zergling);
+        }
+        self.ensure_unit_count(UnitType::Zerg_Drone, 5);
+        self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
+        self.ensure_unit_count(UnitType::Zerg_Drone, 6);
+        self.ensure_free_supply(2);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 100);
+
+        let my_base = self
+            .units
+            .my_completed
+            .iter()
+            .filter(|u| u.get_type().is_resource_depot())
+            .next()
+            .ok_or(anyhow::anyhow!("Base not found"))?
+            .tile_position();
+        let scout_target = self.scout_target(my_base);
+        if let Some(scout_target) = scout_target {
+            self.perform_scouting(ScoutParams {
+                max_workers: if self.units.mine_all.iter().any(|it| {
+                    it.get_type() == UnitType::Zerg_Spawning_Pool
+                        && it.remaining_build_time()
+                            < UnitType::Zerg_Zergling.build_time()
+                                + (self.map.get_path(my_base.center(), scout_target.center()).1
+                                    as f64
+                                    / UnitType::Zerg_Drone.top_speed())
+                                    as i32
+                }) {
+                    1
+                } else {
+                    0
+                },
+                ..ScoutParams::default()
+            });
+        }
+        self.perform_attacking(AttackParams {
+            all_in: true,
+            ..Default::default()
+        });
+
+        Ok(())
     }
 
     fn opening_styx(&mut self) -> anyhow::Result<()> {
@@ -169,21 +290,33 @@ impl MyModule {
         self.ensure_unit_count(UnitType::Zerg_Drone, 7);
         self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
         self.ensure_unit_count(UnitType::Zerg_Overlord, 2);
-        self.ensure_unit_count(UnitType::Zerg_Zergling, 3);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 6);
         self.ensure_building_count(UnitType::Zerg_Hatchery, 2);
         self.ensure_building_count(UnitType::Zerg_Extractor, 1);
-        self.ensure_unit_count(UnitType::Zerg_Zergling, 7);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 14);
         self.ensure_upgrade(UpgradeType::Metabolic_Boost, 1);
         self.ensure_free_supply(2);
-        self.ensure_unit_count(UnitType::Zerg_Zergling, 50);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 100);
         self.ensure_gathering_gas(GatherParams {
             required_resources: -self.tracker.available_gms.gas,
+            max_workers: 3,
             ..Default::default()
         });
 
-        if !self.units.enemy.iter().any(|e| e.get_type().is_building()) {
-            self.scout(ScoutParams::default());
-        }
+        self.perform_scouting(ScoutParams {
+            max_scouts: match self.game.enemy().map(|e| e.get_race()) {
+                Some(Race::Zerg) => 2,
+                Some(Race::Protoss) => 4,
+                _ => 3,
+            },
+            ..ScoutParams::default()
+        });
+        self.perform_attacking(AttackParams::default());
+
+        Ok(())
+    }
+
+    pub fn perform_attacking(&mut self, attack_params: AttackParams) -> anyhow::Result<()> {
         let base = self
             .units
             .my_completed
@@ -200,16 +333,25 @@ impl MyModule {
             .enemy
             .iter()
             .filter(|u| u.get_type().is_building())
-            .min_by_key(|u| {
-                self.map.get_path(base.position(), u.position()).1
-                    + if u.get_type().is_resource_depot() {
-                        0
-                    } else {
-                        300
-                    }
+            .min_by_key(|u| self.map.get_path(base.position(), u.position()).1)
+            .map(|u| {
+                let pos = u.position();
+                self.map
+                    .bases
+                    .iter()
+                    .map(|b| b.position.center())
+                    .filter(|b| b.distance_squared(pos) < 600 * 600)
+                    .next()
+                    .unwrap_or(pos)
             })
-            .map(|u| u.position())
-            .unwrap_or(base.position());
+            .unwrap_or(
+                self.game
+                    .get_start_locations()
+                    .iter()
+                    .min_by_key(|l| self.game.is_explored(**l))
+                    .map(|l| l.center())
+                    .unwrap(),
+            );
         // let mut x = target;
         // let mut path = self.map.get_path(base.position(), target).0;
         // while let Some(next) = path.pop().map(|it| it.top.center()) {
@@ -226,27 +368,112 @@ impl MyModule {
             .cloned()
             .collect();
         if !attackers.is_empty() {
-            Squad { target }.update(self);
+            Squad {
+                target,
+                // If going all in, add some heavy value for combat
+                value_bias: if attack_params.all_in { 400 } else { 0 },
+                min_army: attack_params.min_army,
+            }
+            .update(self);
         }
-
         Ok(())
     }
 
     fn opening_10hatch(&mut self) -> anyhow::Result<()> {
         let supply = self.game.self_().unwrap().supply_used() / 2;
         self.ensure_unit_count(UnitType::Zerg_Drone, 9);
-        self.do_extractor_trick();
+        self.do_extractor_trick(UnitType::Zerg_Drone);
 
         unimplemented!();
         Ok(())
     }
 
-    fn opening_9poolspire(&mut self) -> anyhow::Result<()> {
+    fn two_hatch_hydra(&mut self) -> anyhow::Result<()> {
+        self.ensure_unit_count(UnitType::Zerg_Drone, 9);
+        self.ensure_unit_count(UnitType::Zerg_Overlord, 2);
+        self.ensure_unit_count(UnitType::Zerg_Drone, 10);
+        if self.count_pending_or_ready(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) < 2 {
+            self.ensure_unit_count(UnitType::Zerg_Drone, 12);
+        }
+        self.ensure_base_count(2);
+        self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
+        self.ensure_building_count(UnitType::Zerg_Extractor, 1);
+        self.ensure_unit_count(UnitType::Zerg_Drone, 12);
+        self.ensure_building_count(UnitType::Zerg_Hydralisk_Den, 1);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 4);
+        self.ensure_upgrade(UpgradeType::Grooved_Spines, 1);
+        if self.count_completed(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) >= 2 {
+            self.ensure_building_count(
+                UnitType::Zerg_Creep_Colony,
+                1_usize.min(2_usize.saturating_sub(
+                    self.count_pending_or_ready(|ut| ut == UnitType::Zerg_Sunken_Colony),
+                )),
+            );
+            self.ensure_building_count(UnitType::Zerg_Sunken_Colony, 2);
+        }
+        self.ensure_free_supply(2);
+        self.ensure_unit_count(UnitType::Zerg_Hydralisk, 12);
+        self.ensure_upgrade(UpgradeType::Muscular_Augments, 1);
+        self.ensure_unit_count(UnitType::Zerg_Hydralisk, 200);
+
+        self.ensure_gathering_gas(GatherParams {
+            max_workers: 0.max(3 - self.game.self_().unwrap().gas() / 200),
+            ..Default::default()
+        });
+        self.perform_attacking(AttackParams::default());
+        self.perform_scouting(ScoutParams {
+            max_workers: 0,
+            ..ScoutParams::default()
+        });
+        Ok(())
+    }
+
+    fn three_hatch_zergling(&mut self) -> anyhow::Result<()> {
+        self.ensure_unit_count(UnitType::Zerg_Drone, 9);
+        self.ensure_unit_count(UnitType::Zerg_Overlord, 2);
+        self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
+        if self.count_pending_or_ready(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) < 2 {
+            self.ensure_unit_count(UnitType::Zerg_Drone, 11);
+        }
+        self.ensure_base_count(2);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 4);
+        self.ensure_unit_count(UnitType::Zerg_Drone, 11);
+        self.ensure_base_count(3);
+        if self.has_pending_or_ready(|ut| ut.is_refinery()) {
+            self.ensure_unit_count(UnitType::Zerg_Drone, 13);
+        }
+        self.ensure_building_count(UnitType::Zerg_Extractor, 1);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 6);
+        self.ensure_unit_count(UnitType::Zerg_Overlord, 3);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 12);
+        self.ensure_upgrade(UpgradeType::Metabolic_Boost, 1);
+        self.ensure_free_supply(2);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 300);
+
+        self.ensure_gathering_gas(GatherParams {
+            required_resources: -self.tracker.available_gms.gas,
+            max_workers: 3,
+            ..Default::default()
+        });
+
+        self.perform_attacking(AttackParams {
+            min_army: 28,
+            ..Default::default()
+        });
+        self.perform_scouting(ScoutParams {
+            max_workers: 0,
+            ..ScoutParams::default()
+        });
+        Ok(())
+    }
+
+    fn nine_poolspire(&mut self) -> anyhow::Result<()> {
+        todo!();
         self.ensure_unit_count(UnitType::Zerg_Drone, 9);
         self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
         self.ensure_building_count(UnitType::Zerg_Extractor, 1);
         self.ensure_unit_count(UnitType::Zerg_Overlord, 2);
-        self.ensure_unit_count(UnitType::Zerg_Zergling, 3);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 6);
         self.ensure_upgrade(UpgradeType::Metabolic_Boost, 1);
         self.ensure_building_count(UnitType::Zerg_Lair, 1);
         self.ensure_unit_count(UnitType::Zerg_Drone, 17);
@@ -266,15 +493,11 @@ impl MyModule {
             "No! A {:?} really is very very slow!",
             unit.get_type()
         );
-        ((
-            if unit.flying() {
-                unit.position().distance(target)
-            } else {
-                self.map.get_path(unit.position(), target).1 as f64
-            } + 48.0
-            // Some small buffer for acceleration/deceleration and obstacle avoidance
-        ) / unit.get_type().top_speed()) as u32
-            + 24
+        ((if unit.flying() {
+            unit.position().distance(target)
+        } else {
+            self.map.get_path(unit.position(), target).1 as f64
+        }) / unit.get_type().top_speed()) as u32
     }
 }
 
@@ -293,11 +516,18 @@ impl AiModule for MyModule {
     fn on_start(&mut self, game: &Game) {
         *CVIS.lock().unwrap() = cherry_vis::implementation::CherryVis::new(game);
         self.map = Map::new(game);
-        println!(
-            "{} {}",
-            game.get_latency_frames(),
-            game.get_remaining_latency_frames()
-        );
+        // for x in 0..50 {
+        //     for y in 0..50 {
+        //         cvis().draw_text(
+        //             x * 32,
+        //             y * 32,
+        //             match self.map.get_altitude(WalkPosition::new(x * 4, y * 4)) {
+        //                 rsbwapi::sma::Altitude::Walkable(i) => i.to_string(),
+        //                 _ => "".to_string(),
+        //             },
+        //         );
+        //     }
+        // }
     }
 
     fn on_end(&mut self, game: &Game, _winner: bool) {
@@ -359,7 +589,7 @@ impl AiModule for MyModule {
             let me = self.game.self_().unwrap();
             self.players.update(&self.game);
             self.units.update(&self.game, &self.players);
-            self.skirmishes = Skirmishes::new(&self.units.clusters);
+            self.skirmishes = Skirmishes::new(self, &self.units.clusters);
             self.tracker.unrealized.clear();
             self.tracker.available_units = self
                 .units
@@ -421,16 +651,35 @@ impl AiModule for MyModule {
             }
 
             // self.opening_13_pool_muta();
-            self.opening_styx();
+            match self.game.enemy().map(|e| e.get_race()) {
+                Some(Race::Protoss) => {
+                    // self.two_hatch_hydra();
+                    self.three_hatch_zergling();
+                    // self.two_hatch_hydra();
+                    // self.five_pool();
+                    // self.four_pool();
+                }
+                Some(Race::Terran) => {
+                    self.four_pool();
+                }
+                _ => {
+                    // self.three_hatch_zergling();
+                    self.two_hatch_hydra();
+                    // self.opening_styx();
+                }
+            }
+            // self.opening_styx();
             // self.opening_10hatch();
             // self.opening_9poolspire();
+
+            // Always gather minerals with the remaining drones, can't imagine a situation where
+            // this is a bad idea...
             self.ensure_gathering_minerals();
-            // dbg!("CP: {}", self.map.choke_points.len());
             // for cp in &self.map.choke_points {
             //     for wp in &cp.walk_positions {
             //         let p = wp.to_position();
-            //         // CVIS.lock().unwrap().draw_circle(p.x, p.y, 4, Color::Yellow);
-            //         game.draw_circle_map(p, 4, Color::Blue, false);
+            //         CVIS.lock().unwrap().draw_circle(p.x, p.y, 4, Color::Yellow);
+            //         // game.draw_circle_map(p, 4, Color::Blue, false);
             //     }
             // }
             Ok(())

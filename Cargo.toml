@@ -23,6 +23,7 @@ lazy_static = { version = "1.4.0" }
 rstar = "0.9"
 glam="0.21"
 ordered-float="3"
+backtrace = "0.3"
 
 [features]
 cvis = ["zstd", "serde_json"]

@@ -191,10 +191,6 @@ impl Agent {
             elevation_level: unit.elevation_level(),
             protected_by_dark_swarm: unit.under_dark_swarm(),
             stim_timer: unit.stim_timer(),
-            can_stim: matches!(
-                unit_type,
-                UnitType::Terran_Marine | UnitType::Terran_Firebat
-            ),
             ..base
         }
     }
@@ -246,6 +242,10 @@ impl Agent {
         let max_shields = I24F8::from_num(unit_type.max_shields());
         Self {
             unit_type,
+            can_stim: matches!(
+                unit_type,
+                UnitType::Terran_Marine | UnitType::Terran_Firebat
+            ),
             attack_target_priority: match unit_type {
                 UnitType::Protoss_Interceptor => TargetingPriority::Low,
                 unit if !unit.can_attack() => TargetingPriority::Medium,
@@ -498,9 +498,17 @@ impl Agent {
         self.speed_squared = (self.speed * self.speed).round() as i32;
     }
 
-    fn update_position(&mut self) {
-        self.x += self.vx;
-        self.y += self.vy;
+    fn update_position(&mut self, walkability: impl Fn(i32, i32) -> bool) {
+        let nx = self.x + self.vx;
+        let ny = self.y + self.vy;
+        if self.is_flyer || walkability(nx, ny) {
+            self.x = nx;
+            self.y = ny;
+        } else {
+            // TODO: We simulate "chokes" by slowing down units, is that ok?
+            self.x = (self.x + nx) / 2;
+            self.y = (self.y + ny) / 2;
+        }
     }
 }
 
@@ -722,6 +730,9 @@ impl Script for Retreater {
         let mut selected_enemy: Option<usize> = None;
         let mut selected_distance_squared: i32 = std::i32::MAX;
         let agent = &mut allies[agent_index];
+        if agent.speed == 0.0 {
+            return Attacker {}.simulate(agent_index, allies, enemies);
+        }
         let mut selected_weapon = &agent.ground_weapon;
 
         if let Some(target_index) = agent.attack_target {
@@ -773,8 +784,14 @@ impl Script for Retreater {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct Attacker;
+#[derive(Clone, Copy, Default)]
+pub struct Attacker {}
+
+impl Attacker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
 
 fn distance_squared(a: &Agent, b: &Agent) -> i32 {
     (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)
@@ -1190,9 +1207,10 @@ fn reduce_damage_by_target_size_and_damage_type(
 }
 
 #[derive(Clone)]
-pub struct Simulator<A, B> {
+pub struct Simulator<A, B, W> {
     pub player_a: Player<A>,
     pub player_b: Player<B>,
+    pub walkability: W,
 }
 
 #[derive(Default, Clone)]
@@ -1201,7 +1219,7 @@ pub struct Player<S> {
     pub script: S,
 }
 
-impl<A: Script, B: Script> Simulator<A, B> {
+impl<A: Script, B: Script, W: Fn(i32, i32) -> bool> Simulator<A, B, W> {
     pub fn simulate_for(&mut self, mut frames: i32) -> i32 {
         while frames != 0 {
             // dbg!(frames);
@@ -1216,8 +1234,8 @@ impl<A: Script, B: Script> Simulator<A, B> {
     fn step(&mut self) -> bool {
         let running_a = self.player_a.step(&mut self.player_b.agents);
         let running_b = self.player_b.step(&mut self.player_a.agents);
-        self.player_a.update_stats();
-        self.player_b.update_stats();
+        self.player_a.update_stats(&self.walkability);
+        self.player_b.update_stats(&self.walkability);
         running_a || running_b
     }
 }
@@ -1236,7 +1254,7 @@ impl<S: Script> Player<S> {
         running
     }
 
-    fn update_stats(&mut self) {
+    fn update_stats(&mut self, walkability: impl Fn(i32, i32) -> bool) {
         for agent in self.agents.iter_mut().filter(|it| it.is_alive) {
             // eprintln!(
             //     "{:?} - ({}, {}) + ({}, {}) - hp: {} shields: {}",
@@ -1248,7 +1266,7 @@ impl<S: Script> Player<S> {
             //     agent.health(),
             //     agent.shields()
             // );
-            agent.update_position();
+            agent.update_position(&walkability);
             agent.vx = 0;
             agent.vy = 0;
             agent.healed_this_frame = false;
@@ -1297,7 +1315,7 @@ mod test {
             is_alive: true,
             ..Default::default()
         });
-        player.update_stats();
+        player.update_stats(|x, y| true);
         assert_eq!(player.agents[0].energy, I24F8::from_num(0.03));
     }
 
@@ -1339,12 +1357,13 @@ mod test {
                     UnitType::Protoss_Archon.into(),
                     Agent::from(UnitType::Protoss_Zealot).with_x(48),
                 ],
-                script: Attacker,
+                script: Attacker::new(),
             },
             player_b: Player {
                 agents: vec![Agent::from(UnitType::Zerg_Zergling).with_x(48)],
-                script: Attacker,
+                script: Attacker::new(),
             },
+            walkability: |x, y| true,
         };
 
         simulator.simulate_for(1);
@@ -1360,12 +1379,13 @@ mod test {
         let mut simulator = Simulator {
             player_a: Player {
                 agents: vec![UnitType::Zerg_Zergling.into()],
-                script: Attacker,
+                script: Attacker::new(),
             },
             player_b: Player {
                 agents: vec![Agent::from(UnitType::Protoss_Zealot)],
-                script: Attacker,
+                script: Attacker::new(),
             },
+            walkability: |x, y| true,
         };
 
         let frames = simulator.simulate_for(128);
@@ -1380,12 +1400,13 @@ mod test {
         let mut simulator = Simulator {
             player_a: Player {
                 agents: vec![UnitType::Zerg_Zergling.into()],
-                script: Attacker,
+                script: Attacker::new(),
             },
             player_b: Player {
                 agents: vec![Agent::from(UnitType::Protoss_Pylon)],
-                script: Attacker,
+                script: Attacker::new(),
             },
+            walkability: |x, y| true,
         };
 
         let frames = simulator.simulate_for(96);
@@ -1399,12 +1420,13 @@ mod test {
         let mut simulator = Simulator {
             player_a: Player {
                 agents: vec![UnitType::Zerg_Overlord.into()],
-                script: Attacker,
+                script: Attacker::new(),
             },
             player_b: Player {
                 agents: vec![Agent::from(UnitType::Protoss_Probe)],
-                script: Attacker,
+                script: Attacker::new(),
             },
+            walkability: |x, y| true,
         };
 
         let frames = simulator.simulate_for(128);
@@ -1420,12 +1442,13 @@ mod test {
         let mut simulator = Simulator {
             player_a: Player {
                 agents: vec![ling.clone(), ling.clone()],
-                script: Attacker,
+                script: Attacker::new(),
             },
             player_b: Player {
                 agents: vec![probe.clone()],
-                script: Attacker,
+                script: Attacker::new(),
             },
+            walkability: |x, y| true,
         };
 
         let frames = simulator.simulate_for(8 * 24);
@@ -1476,12 +1499,13 @@ mod test {
         let mut simulator = Simulator {
             player_a: Player {
                 agents: vec![ling.clone(), ling.clone(), ling.clone(), ling.clone()],
-                script: Attacker,
+                script: Attacker::new(),
             },
             player_b: Player {
                 agents: vec![probe.clone(), probe.clone(), probe.clone()],
-                script: Attacker,
+                script: Attacker::new(),
             },
+            walkability: |x, y| true,
         };
 
         let frames = simulator.simulate_for(55);
@@ -1507,17 +1531,109 @@ mod test {
     }
 
     #[test]
+    fn lings_vs_sunkens_and_non_combat() {
+        let ling = Agent::from(UnitType::Zerg_Zergling).with_x(200);
+        let mut simulator = Simulator {
+            player_a: Player {
+                agents: vec![ling.clone(), ling.clone(), ling.clone()],
+                script: Attacker::new(),
+            },
+            player_b: Player {
+                agents: vec![
+                    Agent::from(UnitType::Zerg_Hatchery)
+                        .with_x(200)
+                        .with_y(-100),
+                    Agent::from(UnitType::Zerg_Sunken_Colony),
+                ],
+                script: Attacker::new(),
+            },
+            walkability: |x, y| true,
+        };
+
+        let frames = simulator.simulate_for(256);
+
+        assert_eq!(
+            simulator
+                .player_b
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            2
+        );
+        assert_eq!(
+            simulator
+                .player_a
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn lings_vs_sunkens_and_lings() {
+        let ling = Agent::from(UnitType::Zerg_Zergling);
+        let sunken = Agent::from(UnitType::Zerg_Sunken_Colony).with_x(400);
+        let mut simulator = Simulator {
+            player_a: Player {
+                agents: (0..11).map(|_| ling.clone()).collect(),
+                script: Attacker::new(),
+            },
+            player_b: Player {
+                agents: vec![
+                    sunken.clone(),
+                    sunken.clone(),
+                    sunken.clone(),
+                    sunken.clone(),
+                    ling.clone().with_x(370),
+                    ling.clone().with_x(370),
+                    ling.clone().with_x(370),
+                    ling.clone().with_x(370),
+                    ling.clone().with_x(370),
+                    ling.clone().with_x(370),
+                ],
+                script: Attacker::new(),
+            },
+            walkability: |x, y| true,
+        };
+
+        let frames = simulator.simulate_for(8 * 24);
+
+        assert_eq!(
+            simulator
+                .player_b
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            4
+        );
+        assert_eq!(
+            simulator
+                .player_a
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn lings_vs_sunkens() {
         let ling = Agent::from(UnitType::Zerg_Zergling).with_x(200);
         let mut simulator = Simulator {
             player_a: Player {
                 agents: vec![ling.clone()],
-                script: Attacker,
+                script: Attacker::new(),
             },
             player_b: Player {
                 agents: vec![Agent::from(UnitType::Zerg_Sunken_Colony)],
-                script: Attacker,
+                script: Attacker::new(),
             },
+            walkability: |x, y| true,
         };
 
         let frames = simulator.simulate_for(128);
@@ -1548,7 +1664,7 @@ mod test {
         let mut simulator = Simulator {
             player_a: Player {
                 agents: vec![ling.clone(), ling.clone(), ling.clone()],
-                script: Attacker,
+                script: Attacker::new(),
             },
             player_b: Player {
                 agents: vec![
@@ -1557,8 +1673,9 @@ mod test {
                         .with_target_priority(TargetingPriority::Medium),
                     Agent::from(UnitType::Protoss_Zealot),
                 ],
-                script: Attacker,
+                script: Attacker::new(),
             },
+            walkability: |x, y| true,
         };
 
         let frames = simulator.simulate_for(192);
@@ -1601,7 +1718,7 @@ mod test {
                     ling.clone(),
                     ling.clone(),
                 ],
-                script: Attacker,
+                script: Attacker::new(),
             },
             player_b: Player {
                 agents: vec![
@@ -1609,8 +1726,9 @@ mod test {
                     Agent::from(UnitType::Protoss_Zealot),
                     Agent::from(UnitType::Protoss_Zealot),
                 ],
-                script: Attacker,
+                script: Attacker::new(),
             },
+            walkability: |x, y| true,
         };
 
         let frames = simulator.simulate_for(128);
@@ -1632,6 +1750,43 @@ mod test {
                 .filter(|u| u.is_alive)
                 .count(),
             7
+        );
+    }
+
+    #[test]
+    fn slow_move_no_kill() {
+        let ling = Agent::from(UnitType::Zerg_Zergling).with_x(64);
+        let mut simulator = Simulator {
+            player_a: Player {
+                agents: vec![ling.clone()],
+                script: Attacker::new(),
+            },
+            player_b: Player {
+                agents: vec![Agent::from(UnitType::Protoss_Zealot)],
+                script: Attacker::new(),
+            },
+            walkability: |x, y| false,
+        };
+
+        let frames = simulator.simulate_for(52);
+
+        assert_eq!(
+            simulator
+                .player_b
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            1
+        );
+        assert_eq!(
+            simulator
+                .player_a
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            1
         );
     }
 }

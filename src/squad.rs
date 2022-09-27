@@ -7,6 +7,8 @@ use rstar::AABB;
 
 pub struct Squad {
     pub target: Position,
+    pub value_bias: i32,
+    pub min_army: usize,
 }
 
 impl Squad {
@@ -16,7 +18,7 @@ impl Squad {
             .my_completed
             .iter()
             .filter(|u| u.get_type().is_resource_depot())
-            .next();
+            .min_by_key(|u| module.map.get_path(u.position(), self.target).1);
         if base.is_none() {
             // TODO: Not this way...
             return;
@@ -33,7 +35,7 @@ impl Squad {
         let base_in_danger = enemies.iter().any(|it| {
             // Overlords are not really a threat to our base
             it.get_type().ground_weapon() != WeaponType::None
-                && it.position().distance_squared(base) < 300 * 300
+                && it.position().distance_squared(base) < 500 * 500
         });
         if base_in_danger {
             self.target = base;
@@ -43,89 +45,90 @@ impl Squad {
         //     uc.vanguard.position().y + 50,
         //     vs.clone(),
         // );
-        let fall_backers: Vec<_> = module
-            .skirmishes
-            .skirmishes
-            .iter()
-            .filter(|s| !base_in_danger && s.combat_evaluation < 0)
-            .flat_map(|s| s.cluster.units.iter().filter(|u| u.get_type().can_move()))
-            .filter(|it| {
-                tracker
-                    .available_units
-                    .iter()
-                    .position(|u| it == &u)
-                    .map(|i| tracker.available_units.swap_remove(i))
-                    .is_some()
-            })
-            .collect();
-
-        let vanguard = module
+        let has_minimum_required_army = module
             .units
             .my_completed
             .iter()
+            .filter(|it| {
+                it.get_type().can_attack() && !it.get_type().is_worker() && it.get_type().can_move()
+            })
+            .count()
+            > self.min_army;
+        let mut fall_backers: Vec<&SUnit> = vec![];
+        let mut attackers: Vec<&SUnit> = vec![];
+        for s in module.skirmishes.skirmishes.iter() {
+            let building_defense_bonus = s
+                .cluster
+                .units
+                .iter()
+                .filter(|u| u.player().is_me() && u.get_type().is_building())
+                .count()
+                * 100;
+            let combat_eval =
+                s.combat_evaluation + self.value_bias + (building_defense_bonus as i32);
+            let should_attack = has_minimum_required_army && combat_eval == 0 || combat_eval > 0;
+            let units = s.cluster.units.iter().filter(|u| {
+                u.get_type().can_move()
+                    && (!should_attack || !u.get_type().is_worker())
+                    && tracker
+                        .available_units
+                        .iter()
+                        .position(|it| u == &it)
+                        .map(|i| tracker.available_units.swap_remove(i))
+                        .is_some()
+            });
+
+            if should_attack {
+                attackers.extend(units);
+            } else {
+                fall_backers.extend(units);
+            }
+        }
+
+        let vanguard = attackers
+            .iter()
+            .chain(fall_backers.iter())
             .filter(|it| it.get_type().can_attack())
             .min_by_key(|u| module.map.get_path(u.position(), self.target).1)
             .unwrap();
         // TODO Overlords will end up here to after scouting, is that ok?
         for unit in fall_backers.iter() {
-            let pos = unit.position();
-            let boid_forces: Vec<_> = module
-                .units
-                .all_rstar
-                .locate_in_envelope_intersecting(&AABB::from_corners(
-                    [pos.x - 300, pos.y - 300],
-                    [pos.x + 300, pos.y + 300],
-                ))
-                .filter_map(|o| {
-                    if o.has_weapon_against(unit) && o.player().is_enemy() {
-                        Some(separation(
-                            &unit,
-                            o,
-                            128.0 + o.weapon_against(unit).max_range as f32,
-                            1.0,
-                        ))
-                    } else if &o != unit && o.player().is_me() {
-                        Some(cohesion(&unit, o, 24, 128.0, 0.1))
-                    } else {
-                        None
+            if enemies
+                .iter()
+                .any(|e| e.distance_to(*unit) < 300 && e.has_weapon_against(unit))
+            {
+                if unit.position().distance_squared(base) < 300 * 300 {
+                    let pos = unit.position();
+                    let mut boid_forces: Vec<_> = module
+                        .units
+                        .all_in_range(*unit, 300)
+                        .map(|o| {
+                            separation(
+                                &unit,
+                                o,
+                                32.0 + o.weapon_against(unit).max_range as f32,
+                                1.0,
+                            )
+                        })
+                        .collect();
+                    if boid_forces.iter().any(|it| it.weight > 0.1) {
+                        boid_forces.push(climb(module, &unit, 64, 64, 2.0));
+                        let target = module.positioning(&unit, &boid_forces);
+                        unit.move_to(target);
                     }
-                })
-                .collect();
-            if boid_forces.iter().any(|it| it.weight > 0.1) {
-                let target = module.positioning(&unit, &boid_forces);
-                unit.move_to(target);
-            } else if unit == &vanguard {
-                unit.move_to(base);
-            } else {
+                } else {
+                    unit.move_to(base);
+                }
+            } else if unit.distance_to(*vanguard) > 64 {
                 unit.move_to(vanguard.position());
             }
         }
         let tracker = &mut module.tracker;
-        let units: Vec<_> = module
-            .skirmishes
-            .skirmishes
-            .iter()
-            .filter(|s| base_in_danger || s.combat_evaluation >= 0)
-            .flat_map(|s| {
-                s.cluster
-                    .units
-                    .iter()
-                    .filter(|u| u.get_type().can_attack() && !u.get_type().is_worker())
-            })
-            .filter(|it| {
-                tracker
-                    .available_units
-                    .iter()
-                    .position(|u| it == &u)
-                    .map(|i| tracker.available_units.swap_remove(i))
-                    .is_some()
-            })
-            .collect();
-        if units.is_empty() {
+        if attackers.is_empty() {
             return;
         }
         let uc = UnitCluster {
-            units: &units.clone(),
+            units: &attackers.clone(),
             vanguard,
             vanguard_dist_to_target: module.map.get_path(vanguard.position(), self.target).1,
         };
@@ -155,31 +158,34 @@ impl Squad {
                 // );
                 assert!(u.exists());
                 // If close enough, engage!
-                if u.distance_to(target) < 256 + u.weapon_against(target).max_range {
-                    u.attack(target);
-                } else {
-                    // Otherwise fan out a bit
-                    let pos = u.position();
-                    let boid_forces: Vec<_> = module
-                        .units
-                        .all_rstar
-                        .locate_in_envelope_intersecting(&AABB::from_corners(
-                            [pos.x - 300, pos.y - 300],
-                            [pos.x + 300, pos.y + 300],
-                        ))
-                        .filter_map(|e| {
-                            if e.player().is_enemy() {
-                                // Lead enemy a bit, but home in
-                                Some(cohesion(&u, e, 24, 0.0, 1.0))
-                            } else if e != &u {
-                                // Fan-out to reach enemies without blocking each other
-                                Some(separation(&u, e, 64.0, 1.0))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                }
+                // if u.distance_to(target) < 32 + u.weapon_against(target).max_range {
+                module.engage(&u, target);
+                // TODO Turns out, chokepoints are a styx complete problem....
+                // } else {
+                //     // Otherwise fan out a bit
+                //     let pos = u.position();
+                //     let mut boid_forces: Vec<_> = module
+                //         .units
+                //         .all_rstar
+                //         .locate_in_envelope_intersecting(&AABB::from_corners(
+                //             [pos.x - 300, pos.y - 300],
+                //             [pos.x + 300, pos.y + 300],
+                //         ))
+                //         .filter_map(|e| {
+                //             if e == target {
+                //                 // Lead enemy a bit, but home in
+                //                 Some(cohesion(&u, e, 24, 0.0, 1.0))
+                //             } else if e != &u {
+                //                 // Fan-out to reach enemies without blocking each other
+                //                 Some(separation(&u, e, 64.0, 0.5))
+                //             } else {
+                //                 None
+                //             }
+                //         })
+                //         .collect();
+                //     let target = module.positioning(&u, &boid_forces);
+                //     u.move_to(target);
+                // }
             } else if !u.attacking() {
                 // CVIS.lock().unwrap().draw_line(
                 //     u.position().x,
@@ -188,24 +194,7 @@ impl Squad {
                 //     self.target.y,
                 //     Color::Black,
                 // );
-                let pos = u.position();
-                let boid_forces: Vec<_> = module
-                    .units
-                    .all_rstar
-                    .locate_in_envelope_intersecting(&AABB::from_corners(
-                        [pos.x - 300, pos.y - 300],
-                        [pos.x + 300, pos.y + 300],
-                    ))
-                    .filter(|e| &&u != e)
-                    .map(|e| separation(&u, e, 64.0, 1.0))
-                    .collect();
-                // if boid_forces.iter().any(|it| it.weight > 0.1) {
-                //     let target = module.positioning(&u, &boid_forces);
-                //     u.move_to(target);
-                //     cvis().draw_line(pos.x, pos.y, target.x, target.y, Color::Green);
-                // } else {
                 u.attack_position(self.target);
-                // }
             }
         }
     }

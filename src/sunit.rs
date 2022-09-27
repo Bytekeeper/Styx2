@@ -6,7 +6,7 @@ use crate::SupplyCounter;
 use crate::CVIS;
 use ahash::AHashMap;
 use rsbwapi::*;
-use rstar::{RTree, RTreeObject, AABB};
+use rstar::{Envelope, RTree, RTreeObject, AABB};
 use std::any::type_name;
 use std::borrow;
 use std::cell::Cell;
@@ -135,6 +135,21 @@ impl Units {
 
     pub fn mark_dead(&mut self, unit: &Unit) {
         self.all.remove(&unit.get_id());
+    }
+
+    pub fn all_in_range(
+        &self,
+        position: &impl RTreeObject<Envelope = AABB<[i32; 2]>>,
+        range: i32,
+    ) -> impl Iterator<Item = &SUnit> + '_ {
+        let aabb = position.envelope();
+        let (lower, upper) = (aabb.lower(), aabb.upper());
+        self.all_rstar
+            .locate_in_envelope_intersecting(&AABB::from_corners(
+                [lower[0] - range, lower[1] - range],
+                [upper[0] + range, upper[1] + range],
+            ))
+            .filter(move |it| it.envelope().distance_2(&aabb.center()) < range * range)
     }
 }
 
@@ -338,19 +353,6 @@ impl SUnit {
 
     pub fn can_attack(&self, other: &SUnit) -> bool {
         other.targetable() && self.has_weapon_against(other)
-    }
-
-    pub fn pending_unit(&self) -> UnitType {
-        match self.inner.borrow().pending_goal.goal {
-            PendingGoal::Build(t) | PendingGoal::Morph(t) | PendingGoal::Train(t) => t,
-            PendingGoal::Nothing
-            | PendingGoal::GatherMinerals(_)
-            | PendingGoal::GatherGas(_)
-            | PendingGoal::Upgrade(_)
-            | PendingGoal::MoveTo(_)
-            | PendingGoal::AttackPosition(_)
-            | PendingGoal::Attack(_) => UnitType::None,
-        }
     }
 
     pub fn build_type(&self) -> UnitType {
@@ -618,6 +620,10 @@ impl SUnit {
         self.get_type().top_speed()
     }
 
+    pub fn frames_to_turn_180(&self) -> i32 {
+        128 / self.get_type().turn_radius().max(1)
+    }
+
     pub fn has_speed_upgrade(&self) -> bool {
         let upgrade_type = match self.get_type() {
             UnitType::Zerg_Zergling => UpgradeType::Metabolic_Boost,
@@ -663,6 +669,7 @@ impl SUnit {
 
     pub fn attack(&self, unit: &SUnit) -> BwResult<bool> {
         let mut inner = self.inner.borrow_mut();
+        let stop_frames = stop_frames(inner.type_);
         inner.act(
             |inner| {
                 if inner.order_target().as_ref() == Some(unit) {
@@ -672,7 +679,7 @@ impl SUnit {
                 }
             },
             PendingGoal::Attack(unit.clone()),
-            4,
+            stop_frames.max(2),
         )
     }
 
@@ -929,7 +936,9 @@ impl UnitInfo {
     }
 
     pub fn build_type(&self) -> UnitType {
-        if let PendingGoal::Build(t) | PendingGoal::Morph(t) = self.pending_goal.goal {
+        if let PendingGoal::Train(t) | PendingGoal::Build(t) | PendingGoal::Morph(t) =
+            self.pending_goal.goal
+        {
             return t;
         }
         self.build_type

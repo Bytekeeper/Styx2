@@ -2,7 +2,8 @@ use crate::cherry_vis::*;
 use crate::{MyModule, SUnit};
 use glam::Vec2;
 use ordered_float::OrderedFloat;
-use rsbwapi::Position;
+use rsbwapi::sma::Altitude;
+use rsbwapi::{Position, Rectangle};
 
 #[derive(Debug)]
 pub struct WeightedPosition {
@@ -125,6 +126,90 @@ pub fn goal(
         position: target - unit,
         weight,
     }
+}
+
+pub fn climb(
+    module: &MyModule,
+    unit: &SUnit,
+    range: i32,
+    max_altitude: i16,
+    weight: f32,
+) -> WeightedPosition {
+    let pos = unit.position().to_walk_position();
+    let current_altitude = match module.map.get_altitude(pos) {
+        Altitude::Walkable(x) => x,
+        _ => 0,
+    };
+    if current_altitude > max_altitude {
+        return WeightedPosition::ZERO;
+    }
+    let range = (range + 7) / 8;
+    let highest_nearby_position = Rectangle::new(pos - (range, range), pos + (range, range))
+        .into_iter()
+        .filter(|wp| wp.is_valid(&&module.game))
+        .max_by_key(|wp| match module.map.get_altitude(*wp) {
+            Altitude::Walkable(x) => x,
+            _ => 0,
+        })
+        .unwrap();
+    // CVIS.lock()
+    //     .unwrap()
+    //     .log_unit_frame(&unit, format!("{:?}", highest_nearby_position));
+    let scale = (max_altitude - current_altitude) as f32 / max_altitude as f32;
+    // cvis().draw_line(
+    //     unit.position().x,
+    //     unit.position().y,
+    //     highest_nearby_position.center().x,
+    //     highest_nearby_position.center().y,
+    //     rsbwapi::Color::Red,
+    // );
+    WeightedPosition {
+        position: pos_to_vec2(highest_nearby_position.center() - unit.position()),
+        weight: weight * scale,
+    }
+}
+
+pub fn follow_path(
+    module: &MyModule,
+    unit: &SUnit,
+    target: Position,
+    weight: f32,
+) -> WeightedPosition {
+    let pos = unit.position();
+    let result = if unit.flying() {
+        WeightedPosition {
+            weight,
+            position: pos_to_vec2(target - pos),
+        }
+    } else {
+        let path = module.map.get_path(unit.position(), target);
+        dbg!(path.0.len(), path.1);
+        let path = path.0;
+        let (a, b) = match (path.get(0), path.get(1)) {
+            (None, None) => (target, target),
+            (Some(a), None) => (a.top.center(), target),
+            (Some(a), Some(b)) => (a.top.center(), b.top.center()),
+            _ => unreachable!(),
+        };
+        cvis().log_unit_frame(unit, format!("{} - {} x {} pl: {}", a, b, pos, path.len()));
+        cvis().draw_line(a.x, a.y, b.x, b.y, rsbwapi::Color::Red);
+        WeightedPosition {
+            weight,
+            position: pos_to_vec2(a) * 0.95 + pos_to_vec2(b) * 0.05 - pos_to_vec2(pos),
+        }
+    };
+    let t = Position {
+        x: result.position.x as i32,
+        y: result.position.y as i32,
+    } + unit.position();
+    cvis().draw_line(
+        unit.position().x,
+        unit.position().y,
+        t.x,
+        t.y,
+        rsbwapi::Color::Red,
+    );
+    result
 }
 
 fn pos_to_vec2(pos: Position) -> Vec2 {
