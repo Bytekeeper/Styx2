@@ -50,6 +50,7 @@ pub fn dbscan(elements: &RTree<SUnit>, eps: i32, min_pts: usize) -> Vec<Cluster>
             }
         }
     }
+    // "Noise" still are units we should command
     for e in elements {
         if label.get(e).unwrap() == &NOISE {
             c += 1;

@@ -1,6 +1,7 @@
 use crate::boids::*;
 use crate::cherry_vis::*;
 use crate::combat_sim as cs;
+use crate::is_attacker;
 use crate::*;
 use rsbwapi::*;
 use rstar::AABB;
@@ -12,13 +13,8 @@ pub struct Squad {
 }
 
 impl Squad {
-    pub fn update(&mut self, module: &mut MyModule) {
-        let base = module
-            .units
-            .my_completed
-            .iter()
-            .filter(|u| u.get_type().is_resource_depot())
-            .min_by_key(|u| module.map.get_path(u.position(), self.target).1);
+    pub fn execute(&mut self, module: &mut MyModule) {
+        let base = module.forward_base();
         if base.is_none() {
             // TODO: Not this way...
             return;
@@ -61,15 +57,19 @@ impl Squad {
                 .cluster
                 .units
                 .iter()
-                .filter(|u| u.player().is_me() && u.get_type().is_building())
+                .filter(|u| {
+                    u.player().is_me()
+                        && u.get_type().is_building()
+                        && enemies.iter().any(|e| e.is_close_to_weapon_range(u, 64))
+                })
                 .count()
                 * 100;
             let combat_eval =
-                s.combat_evaluation + self.value_bias + (building_defense_bonus as i32);
+                s.combat_evaluation.to_i32() + self.value_bias + (building_defense_bonus as i32);
             let should_attack = has_minimum_required_army && combat_eval == 0 || combat_eval > 0;
             let units = s.cluster.units.iter().filter(|u| {
                 u.get_type().can_move()
-                    && (!should_attack || !u.get_type().is_worker())
+                    && !u.get_type().is_worker()
                     && tracker
                         .available_units
                         .iter()
@@ -85,10 +85,11 @@ impl Squad {
             }
         }
 
+        // todo!("How can there be no vanguard?");
         let vanguard = attackers
             .iter()
             .chain(fall_backers.iter())
-            .filter(|it| it.get_type().can_attack())
+            .filter(|u| is_attacker(u))
             .min_by_key(|u| module.map.get_path(u.position(), self.target).1)
             .unwrap();
         // TODO Overlords will end up here to after scouting, is that ok?
@@ -97,7 +98,8 @@ impl Squad {
                 .iter()
                 .any(|e| e.distance_to(*unit) < 300 && e.has_weapon_against(unit))
             {
-                if unit.position().distance_squared(base) < 300 * 300 {
+                if unit.position().distance_squared(base) < 300 * 300 || unit.get_type().is_worker()
+                {
                     let pos = unit.position();
                     let mut boid_forces: Vec<_> = module
                         .units
@@ -106,13 +108,17 @@ impl Squad {
                             separation(
                                 &unit,
                                 o,
-                                32.0 + o.weapon_against(unit).max_range as f32,
+                                32.0 + if o.player().is_enemy() {
+                                    o.weapon_against(unit).max_range as f32
+                                } else {
+                                    0.0
+                                },
                                 1.0,
                             )
                         })
                         .collect();
                     if boid_forces.iter().any(|it| it.weight > 0.1) {
-                        boid_forces.push(climb(module, &unit, 64, 64, 2.0));
+                        boid_forces.push(climb(module, &unit, 32, 32, 1.0));
                         let target = module.positioning(&unit, &boid_forces);
                         unit.move_to(target);
                     }
@@ -124,7 +130,7 @@ impl Squad {
             }
         }
         let tracker = &mut module.tracker;
-        if attackers.is_empty() {
+        if attackers.is_empty() || enemies.is_empty() {
             return;
         }
         let uc = UnitCluster {

@@ -1,7 +1,8 @@
 use crate::cherry_vis::*;
 use crate::cluster::*;
 use crate::combat_sim::*;
-use crate::MyModule;
+use crate::is_attacker;
+use crate::{MyModule, SUnit};
 use rsbwapi::{Position, UnitType};
 use std::rc::Rc;
 
@@ -11,9 +12,36 @@ pub struct Skirmishes {
 }
 
 pub struct Skirmish {
-    pub combat_evaluation: i32,
+    pub combat_evaluation: CombatEvaluation,
     pub cluster: Rc<Cluster>,
     pub engaged: bool,
+    pub vanguard: Option<SUnit>,
+}
+
+#[derive(Debug)]
+pub struct CombatEvaluation {
+    pub me_fleeing: SimResult,
+    pub both_fighting: SimResult,
+    pub enemy_defending: SimResult,
+}
+
+impl CombatEvaluation {
+    pub fn to_i32(&self) -> i32 {
+        self.both_fighting.delta().min(self.enemy_defending.delta()) + self.me_fleeing.my_dead
+    }
+}
+
+// These are not unit numbers! They are the sum of lost "value" per player
+#[derive(Debug)]
+pub struct SimResult {
+    my_dead: i32,
+    enemy_dead: i32,
+}
+
+impl SimResult {
+    pub fn delta(&self) -> i32 {
+        self.enemy_dead - self.my_dead
+    }
 }
 
 impl Skirmishes {
@@ -93,43 +121,50 @@ impl Skirmishes {
                     .collect::<String>()
             ));
 
-            let my_dead_after_fleeing: i32 = sim_flee
-                .player_a
-                .agents
-                .iter()
-                .filter(|u| !u.is_alive)
-                .map(|u| Self::agent_value(u))
-                .sum();
-            let my_dead: i32 = sim_attack
-                .player_a
-                .agents
-                .iter()
-                .filter(|u| !u.is_alive)
-                .map(|u| Self::agent_value(u))
-                .sum();
-            let enemy_dead: i32 = sim_attack
-                .player_b
-                .agents
-                .iter()
-                .filter(|u| !u.is_alive)
-                .map(|u| Self::agent_value(u))
-                .sum();
-            let enemy_defense_my_dead: i32 = sim_enemy_defends
-                .player_a
-                .agents
-                .iter()
-                .filter(|u| !u.is_alive)
-                .map(|u| Self::agent_value(u))
-                .sum();
-            let enemy_defense_enemy_dead: i32 = sim_enemy_defends
-                .player_b
-                .agents
-                .iter()
-                .filter(|u| !u.is_alive)
-                .map(|u| Self::agent_value(u))
-                .sum();
-            let combat_evaluation = enemy_dead - my_dead;
-            let enemy_defense_evaluation = enemy_defense_enemy_dead - enemy_defense_my_dead;
+            let me_fleeing = SimResult {
+                my_dead: sim_flee
+                    .player_a
+                    .agents
+                    .iter()
+                    .filter(|u| !u.is_alive)
+                    .map(|u| Self::agent_value(u))
+                    .sum(),
+                enemy_dead: 0,
+            };
+            let both_fighting = SimResult {
+                my_dead: sim_attack
+                    .player_a
+                    .agents
+                    .iter()
+                    .filter(|u| !u.is_alive)
+                    .map(|u| Self::agent_value(u))
+                    .sum(),
+                enemy_dead: sim_attack
+                    .player_b
+                    .agents
+                    .iter()
+                    .filter(|u| !u.is_alive)
+                    .map(|u| Self::agent_value(u))
+                    .sum(),
+            };
+            let enemy_defending = SimResult {
+                my_dead: sim_enemy_defends
+                    .player_a
+                    .agents
+                    .iter()
+                    .filter(|u| !u.is_alive)
+                    .map(|u| Self::agent_value(u))
+                    .sum(),
+                enemy_dead: sim_enemy_defends
+                    .player_b
+                    .agents
+                    .iter()
+                    .filter(|u| !u.is_alive)
+                    .map(|u| Self::agent_value(u))
+                    .sum(),
+            };
+            let combat_evaluation = both_fighting.delta();
+            let enemy_defense_evaluation = enemy_defending.delta();
 
             let engaged = cluster.units.iter().any(|u| {
                 u.player().is_me()
@@ -139,10 +174,30 @@ impl Skirmishes {
                     })
             });
             skirmishes.push(Skirmish {
-                combat_evaluation: combat_evaluation.min(enemy_defense_evaluation)
-                    + my_dead_after_fleeing,
+                combat_evaluation: CombatEvaluation {
+                    me_fleeing,
+                    enemy_defending,
+                    both_fighting,
+                },
                 cluster: cluster.clone(),
                 engaged,
+                vanguard: cluster
+                    .units
+                    .iter()
+                    .filter(|u| u.player().is_me() && is_attacker(u))
+                    .map(|u| {
+                        cluster
+                            .units
+                            .iter()
+                            .filter(|u| u.player().is_enemy())
+                            .map(|e| e.distance_to(u))
+                            .min()
+                            .map(|d| (u, d))
+                    })
+                    .flatten()
+                    .min_by_key(|(_, d)| *d)
+                    .map(|(u, d)| u)
+                    .cloned(),
             });
         }
 
@@ -155,10 +210,6 @@ impl Skirmishes {
         // Cost
         let mut res = (a.unit_type.mineral_price() + 3 * a.unit_type.gas_price())
             / (1 + a.unit_type.is_two_units_in_one_egg() as i32);
-        // Zerg workers are a bit more important
-        if a.unit_type == UnitType::Zerg_Drone {
-            res = res * 3 / 2;
-        }
         assert!(res >= 0);
         res
     }

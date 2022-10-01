@@ -4,12 +4,12 @@ mod build;
 mod cherry_vis;
 mod cluster;
 mod combat_sim;
+mod config;
 mod duration;
 mod gathering;
 mod gms;
 mod grid;
 mod micro;
-mod sbase;
 mod scouting;
 mod skirmish;
 mod splayer;
@@ -21,11 +21,11 @@ mod train;
 mod upgrade;
 
 use cherry_vis::*;
+use config::*;
 use gathering::*;
 use gms::*;
 use rsbwapi::sma::*;
 pub use rsbwapi::*;
-use sbase::*;
 use scouting::*;
 use skirmish::*;
 use splayer::*;
@@ -66,9 +66,36 @@ pub struct MyModule {
 }
 
 impl MyModule {
-    pub fn base_near(&self, position: Position) -> Option<SBase> {
-        // TODO
-        None
+    // Find "most forward" of our bases
+    pub fn forward_base(&self) -> Option<SUnit> {
+        self.units
+            .my_completed
+            .iter()
+            .filter(|u| u.get_type().is_resource_depot())
+            .max_by_key(|b| {
+                self.game
+                    .get_start_locations()
+                    .iter()
+                    .map(|l| self.map.get_path(b.position(), l.center()).1)
+                    .min()
+            })
+            .cloned()
+    }
+
+    // Find "main base" - for now it's just any base close to a start position
+    pub fn main_base(&self) -> Option<SUnit> {
+        self.units
+            .my_completed
+            .iter()
+            .filter(|u| u.get_type().is_resource_depot())
+            .min_by_key(|b| {
+                self.game
+                    .get_start_locations()
+                    .iter()
+                    .map(|l| self.map.get_path(b.position(), l.center()).1)
+                    .min()
+            })
+            .cloned()
     }
 
     pub fn is_in_narrow_choke(&self, tp: TilePosition) -> bool {
@@ -176,7 +203,16 @@ impl MyModule {
             .units
             .mine_all
             .iter()
-            .map(|u| count_check(u.build_type()) + check(u.get_type()) as usize)
+            .map(|u| {
+                count_check(u.build_type())
+                    + if u.completed() {
+                        check(u.get_type()) as usize
+                    } else {
+                        // Lings have a few frames where they are not yet completed and only one of
+                        // the two lings will exist for a short period
+                        count_check(u.get_type())
+                    }
+            })
             .sum::<usize>()
             + self
                 .tracker
@@ -303,6 +339,7 @@ impl MyModule {
             ..Default::default()
         });
 
+        self.perform_attacking(AttackParams::default());
         self.perform_scouting(ScoutParams {
             max_scouts: match self.game.enemy().map(|e| e.get_race()) {
                 Some(Race::Zerg) => 2,
@@ -311,7 +348,6 @@ impl MyModule {
             },
             ..ScoutParams::default()
         });
-        self.perform_attacking(AttackParams::default());
 
         Ok(())
     }
@@ -374,7 +410,7 @@ impl MyModule {
                 value_bias: if attack_params.all_in { 400 } else { 0 },
                 min_army: attack_params.min_army,
             }
-            .update(self);
+            .execute(self);
         }
         Ok(())
     }
@@ -400,7 +436,9 @@ impl MyModule {
         self.ensure_building_count(UnitType::Zerg_Extractor, 1);
         self.ensure_unit_count(UnitType::Zerg_Drone, 12);
         self.ensure_building_count(UnitType::Zerg_Hydralisk_Den, 1);
-        self.ensure_unit_count(UnitType::Zerg_Zergling, 4);
+        if self.count_pending_or_ready(|u| u == UnitType::Zerg_Hydralisk) < 1 {
+            self.ensure_unit_count(UnitType::Zerg_Zergling, 4);
+        }
         self.ensure_upgrade(UpgradeType::Grooved_Spines, 1);
         if self.count_completed(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) >= 2 {
             self.ensure_building_count(
@@ -621,16 +659,27 @@ impl AiModule for MyModule {
 
             for s in self.skirmishes.skirmishes.iter() {
                 let c = &s.cluster;
-                if c.units.is_empty() {
-                    dbg!("REALLY?");
-                    continue;
-                }
                 let mut iter = c.units.iter();
                 let head = iter.next().unwrap();
                 cvis().draw_text(
                     head.position().x,
                     head.position().y,
-                    format!("{} {:.2}", s.combat_evaluation, s.cluster.b),
+                    format!("Flee    : {:?}", s.combat_evaluation.me_fleeing),
+                );
+                cvis().draw_text(
+                    head.position().x,
+                    head.position().y + 10,
+                    format!("Fight   : {:?}", s.combat_evaluation.both_fighting),
+                );
+                cvis().draw_text(
+                    head.position().x,
+                    head.position().y + 20,
+                    format!("E-Defend: {:?}", s.combat_evaluation.enemy_defending),
+                );
+                cvis().draw_text(
+                    head.position().x,
+                    head.position().y + 30,
+                    format!("Eval: {:?}", s.combat_evaluation.to_i32()),
                 );
                 // cvis().draw_line(
                 //     head.position().x - 30,
@@ -639,22 +688,24 @@ impl AiModule for MyModule {
                 //     head.position().y + (30.0 * c.b) as i32,
                 //     Color::White,
                 // );
-                // for next in iter {
-                //     cvis().draw_line(
-                //         next.position().x,
-                //         next.position().y,
-                //         head.position().x,
-                //         head.position().y,
-                //         Color::Brown,
-                //     );
-                // }
+                if DRAW_CLUSTER_CONNECTION {
+                    for next in iter {
+                        cvis().draw_line(
+                            next.position().x,
+                            next.position().y,
+                            head.position().x,
+                            head.position().y,
+                            Color::Brown,
+                        );
+                    }
+                }
             }
 
             // self.opening_13_pool_muta();
             match self.game.enemy().map(|e| e.get_race()) {
                 Some(Race::Protoss) => {
-                    // self.two_hatch_hydra();
-                    self.three_hatch_zergling();
+                    self.two_hatch_hydra();
+                    // self.three_hatch_zergling();
                     // self.two_hatch_hydra();
                     // self.five_pool();
                     // self.four_pool();
@@ -662,10 +713,12 @@ impl AiModule for MyModule {
                 Some(Race::Terran) => {
                     self.four_pool();
                 }
-                _ => {
-                    // self.three_hatch_zergling();
-                    self.two_hatch_hydra();
+                Some(Race::Zerg) => {
                     // self.opening_styx();
+                    self.two_hatch_hydra();
+                }
+                _ => {
+                    self.two_hatch_hydra();
                 }
             }
             // self.opening_styx();

@@ -1,4 +1,5 @@
 use crate::cherry_vis::*;
+use crate::config::*;
 use crate::{MyModule, SUnit};
 use glam::Vec2;
 use ordered_float::OrderedFloat;
@@ -52,9 +53,22 @@ impl MyModule {
             target_position
         } else {
             self.furthest_walkable_position(unit.position(), target_position)
-                .map(|p| p.center())
+                .map(|p| {
+                    if p == target_position.to_walk_position() {
+                        target_position
+                    } else {
+                        p.center()
+                    }
+                })
                 .unwrap_or_else(|| unit.position())
         };
+        cvis().draw_line(
+            target_position.x,
+            target_position.y,
+            result.x,
+            result.y,
+            rsbwapi::Color::Purple,
+        );
         cvis().draw_line(
             unit.position().x,
             unit.position().y,
@@ -76,7 +90,7 @@ pub fn separation(
     let unit = pos_to_vec2(unit.position());
     let other = pos_to_vec2(other.position());
     let dist = unit.distance(other);
-    if dist >= minimum_distance {
+    if dist >= minimum_distance || other == unit {
         WeightedPosition::ZERO
     } else if dist == 0.0 {
         // Poor mans random
@@ -87,8 +101,18 @@ pub fn separation(
     } else {
         // "Push" more if we're closer
         let scale = 1.0 - dist / minimum_distance;
+        let position = (unit - other) * (minimum_distance - dist) / dist;
+        if DRAW_FORCE_VECTORS {
+            cvis().draw_line(
+                unit.x as i32,
+                unit.y as i32,
+                (unit.x + position.x) as i32,
+                (unit.y + position.y) as i32,
+                rsbwapi::Color::Red,
+            );
+        }
         WeightedPosition {
-            position: (unit - other) * (minimum_distance - dist) / dist,
+            position,
             weight: weight * scale,
         }
     }
@@ -148,21 +172,20 @@ pub fn climb(
         .into_iter()
         .filter(|wp| wp.is_valid(&&module.game))
         .max_by_key(|wp| match module.map.get_altitude(*wp) {
-            Altitude::Walkable(x) => x,
+            Altitude::Walkable(x) => x as u32 * 1000000 + wp.distance_squared(pos),
             _ => 0,
         })
         .unwrap();
-    // CVIS.lock()
-    //     .unwrap()
-    //     .log_unit_frame(&unit, format!("{:?}", highest_nearby_position));
     let scale = (max_altitude - current_altitude) as f32 / max_altitude as f32;
-    // cvis().draw_line(
-    //     unit.position().x,
-    //     unit.position().y,
-    //     highest_nearby_position.center().x,
-    //     highest_nearby_position.center().y,
-    //     rsbwapi::Color::Red,
-    // );
+    if DRAW_FORCE_VECTORS {
+        cvis().draw_line(
+            unit.position().x,
+            unit.position().y,
+            highest_nearby_position.center().x,
+            highest_nearby_position.center().y,
+            rsbwapi::Color::Brown,
+        );
+    }
     WeightedPosition {
         position: pos_to_vec2(highest_nearby_position.center() - unit.position()),
         weight: weight * scale,
@@ -191,8 +214,6 @@ pub fn follow_path(
             (Some(a), Some(b)) => (a.top.center(), b.top.center()),
             _ => unreachable!(),
         };
-        cvis().log_unit_frame(unit, format!("{} - {} x {} pl: {}", a, b, pos, path.len()));
-        cvis().draw_line(a.x, a.y, b.x, b.y, rsbwapi::Color::Red);
         WeightedPosition {
             weight,
             position: pos_to_vec2(a) * 0.95 + pos_to_vec2(b) * 0.05 - pos_to_vec2(pos),
@@ -202,13 +223,6 @@ pub fn follow_path(
         x: result.position.x as i32,
         y: result.position.y as i32,
     } + unit.position();
-    cvis().draw_line(
-        unit.position().x,
-        unit.position().y,
-        t.x,
-        t.y,
-        rsbwapi::Color::Red,
-    );
     result
 }
 

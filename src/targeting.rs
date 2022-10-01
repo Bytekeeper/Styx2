@@ -68,23 +68,24 @@ impl<'a> Attacker<'a> {
     }
 
     fn is_target_reachable_enemy_base(&self, module: &MyModule, target_position: Position) -> bool {
-        let target_base = module.base_near(target_position);
-        if let Some(target_base) = target_base {
-            if !target_base.player.is_enemy() {
-                return false;
-            }
-            if target_base.last_scouted != -1
-                && target_base
-                    .resource_depot
-                    .map(|d| d.exists())
-                    .unwrap_or(false)
-            {
-                return false;
-            }
-            true
-        } else {
-            false
-        }
+        // TODO search a base etc
+        // let target_base : Some;
+        // if let Some(target_base) = target_base {
+        //     if !target_base.player.is_enemy() {
+        //         return false;
+        //     }
+        //     if target_base.last_scouted != -1
+        //         && target_base
+        //             .resource_depot
+        //             .map(|d| d.exists())
+        //             .unwrap_or(false)
+        //     {
+        //         return false;
+        //     }
+        //     true
+        // } else {
+        false
+        // }
     }
 }
 

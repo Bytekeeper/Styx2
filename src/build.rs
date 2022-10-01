@@ -182,27 +182,18 @@ impl MyModule {
         let base = if let Some(at) = param.at {
             at
         } else {
-            self.units
-                .my_completed
-                .iter()
-                .filter(|u| u.get_type().is_resource_depot() && u.completed())
-                // TODO Do proper hierarchical map analysis
-                .min_by_key(|u| {
-                    let min_dist_to_start_base = self
-                        .game
-                        .get_start_locations()
-                        .iter()
-                        .map(|loc| self.map.get_path(u.position(), loc.center()).1)
-                        .min()
-                        .unwrap() as i32;
-                    if param.unit_type == UnitType::Zerg_Creep_Colony {
-                        -min_dist_to_start_base
-                    } else {
-                        min_dist_to_start_base
-                    }
-                })
-                .map(|u| u.tile_position())
-                .ok_or(FailureReason::misc("No base found"))?
+            if matches!(
+                param.unit_type,
+                UnitType::Zerg_Creep_Colony
+                    | UnitType::Terran_Bunker
+                    | UnitType::Protoss_Photon_Cannon
+            ) {
+                self.forward_base()
+            } else {
+                self.main_base()
+            }
+            .map(|u| u.tile_position())
+            .ok_or(FailureReason::misc("No base found"))?
         };
         let builders: Vec<_> = self
             .tracker

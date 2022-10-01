@@ -442,6 +442,21 @@ impl SUnit {
             .max(self.get_air_weapon().cooldown)
     }
 
+    pub fn is_close_to_weapon_range(&self, other: &SUnit, buffer: i32) -> bool {
+        // TODO Is there really a marine in the bunker?
+        if self.inner.borrow().type_ == UnitType::Terran_Bunker {
+            let wpn = UnitType::Terran_Marine.ground_weapon();
+
+            let max_range = wpn.max_range();
+            let distance = self.distance_to(other);
+            distance <= max_range + buffer
+        } else {
+            let wpn = self.weapon_against(other);
+            let distance = self.distance_to(other);
+            (wpn.min_range == 0 || wpn.min_range < distance) && distance <= wpn.max_range + buffer
+        }
+    }
+
     pub fn is_in_weapon_range(&self, other: &SUnit) -> bool {
         // TODO Is there really a marine in the bunker?
         if self.inner.borrow().type_ == UnitType::Terran_Bunker {
@@ -815,7 +830,8 @@ pub struct UnitInfo {
 
 #[derive(Debug, Clone)]
 pub struct Weapon {
-    pub damage: i32,    // Including upgrades
+    pub damage: i32, // Including upgrades
+    pub min_range: i32,
     pub max_range: i32, // Including upgrades
     pub max_hits: i32,
     pub cooldown: i32, // Including upgrades
@@ -859,6 +875,7 @@ impl UnitInfo {
             is_powered: unit.is_powered(),
             // TODO What if it's a Bunker?
             ground_weapon: Weapon {
+                min_range: unit.get_type().ground_weapon().min_range(),
                 max_range: player.weapon_max_range(unit.get_type().ground_weapon()),
                 max_hits: unit.get_type().max_ground_hits(),
                 cooldown: unit.get_ground_weapon_cooldown(),
@@ -868,6 +885,7 @@ impl UnitInfo {
             },
             // TODO What if it's a Bunker?
             air_weapon: Weapon {
+                min_range: unit.get_type().air_weapon().min_range(),
                 max_range: player.weapon_max_range(unit.get_type().air_weapon()),
                 max_hits: unit.get_type().max_air_hits(),
                 cooldown: unit.get_air_weapon_cooldown(),
@@ -1005,4 +1023,8 @@ impl IsRanged for UnitType {
             || self.is_flyer()
             || self == &UnitType::Protoss_Reaver
     }
+}
+
+pub fn is_attacker(unit: &SUnit) -> bool {
+    unit.get_type().can_attack() && !unit.get_type().is_worker()
 }

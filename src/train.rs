@@ -18,11 +18,35 @@ impl MyModule {
         unit_type: UnitType,
         amount: usize,
     ) -> Result<(), FailureReason> {
+        let x = self
+            .units
+            .mine_all
+            .iter()
+            .filter(|u| {
+                u.get_type() == UnitType::Zerg_Zergling || u.build_type() == UnitType::Zerg_Zergling
+            })
+            .count();
         let units_per_egg = 1 + unit_type.is_two_units_in_one_egg() as usize;
         for _ in 0..(units_per_egg / 2
             + amount.saturating_sub(self.count_pending_or_ready(|ut| ut == unit_type)))
             / units_per_egg
         {
+            if unit_type == UnitType::Zerg_Zergling {
+                cvis().log(format!(
+                    "Lings: {} {} {}",
+                    self.count_pending_or_ready(|ut| ut == unit_type),
+                    self.units
+                        .mine_all
+                        .iter()
+                        .filter(|u| u.get_type() == unit_type && u.completed())
+                        .count(),
+                    self.units
+                        .mine_all
+                        .iter()
+                        .filter(|u| u.build_type() == unit_type)
+                        .count()
+                ));
+            }
             self.start_train(TrainParam::train(unit_type))?;
         }
         Ok(())

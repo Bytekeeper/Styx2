@@ -70,11 +70,7 @@ impl MyModule {
             .filter(|l| !self.game.is_explored(*l))
             .collect();
         let my_base = self
-            .units
-            .my_completed
-            .iter()
-            .filter(|u| u.get_type().is_resource_depot())
-            .next()
+            .forward_base()
             .ok_or(FailureReason::misc("Base not found"))?
             .tile_position();
 
