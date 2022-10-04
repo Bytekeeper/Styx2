@@ -14,12 +14,11 @@ pub struct Squad {
 
 impl Squad {
     pub fn execute(&mut self, module: &mut MyModule) {
-        let base = module.forward_base();
-        if base.is_none() {
-            // TODO: Not this way...
-            return;
-        }
-        let base = base.unwrap().position();
+        // TODO Don't just bail without base, we could still be base trading
+        let base = match module.forward_base() {
+            None => return,
+            Some(x) => x,
+        };
         let tracker = &mut module.tracker;
         let enemies: Vec<_> = module
             .units
@@ -28,11 +27,18 @@ impl Squad {
             .filter(|it| !it.missing())
             .collect();
         // TODO: When is our base actually in danger?
-        let base_in_danger = enemies.iter().any(|it| {
-            // Overlords are not really a threat to our base
-            it.get_type().ground_weapon() != WeaponType::None
-                && it.position().distance_squared(base) < 500 * 500
+        let base_in_danger = module.skirmishes.skirmishes.iter().any(|c| {
+            c.cluster.units.contains(&base)
+                && c.cluster.units.iter().any(|it| {
+                    it.player().is_me()
+                        && it.get_type().is_building()
+                        && c.cluster
+                            .units
+                            .iter()
+                            .any(|e| e.player().is_enemy() && e.is_close_to_weapon_range(it, 64))
+                })
         });
+        let base = base.position();
         if base_in_danger {
             self.target = base;
         }
@@ -49,7 +55,8 @@ impl Squad {
                 it.get_type().can_attack() && !it.get_type().is_worker() && it.get_type().can_move()
             })
             .count()
-            > self.min_army;
+            >= self.min_army;
+        cvis().log(format!("{has_minimum_required_army}"));
         let mut fall_backers: Vec<&SUnit> = vec![];
         let mut attackers: Vec<&SUnit> = vec![];
         for s in module.skirmishes.skirmishes.iter() {
@@ -60,16 +67,17 @@ impl Squad {
                 .filter(|u| {
                     u.player().is_me()
                         && u.get_type().is_building()
-                        && enemies.iter().any(|e| e.is_close_to_weapon_range(u, 64))
+                        && enemies.iter().any(|e| e.is_close_to_weapon_range(u, 96))
                 })
                 .count()
-                * 100;
+                * 200;
             let combat_eval =
                 s.combat_evaluation.to_i32() + self.value_bias + (building_defense_bonus as i32);
             let should_attack = has_minimum_required_army && combat_eval == 0 || combat_eval > 0;
+            cvis().log(format!("{building_defense_bonus} {should_attack}"));
             let units = s.cluster.units.iter().filter(|u| {
                 u.get_type().can_move()
-                    && !u.get_type().is_worker()
+                    && is_attacker(u)
                     && tracker
                         .available_units
                         .iter()
@@ -92,7 +100,7 @@ impl Squad {
             .filter(|u| is_attacker(u))
             .min_by_key(|u| module.map.get_path(u.position(), self.target).1)
             .unwrap();
-        // TODO Overlords will end up here to after scouting, is that ok?
+        // TODO Overlords will end up here too, is that ok?
         for unit in fall_backers.iter() {
             if enemies
                 .iter()
@@ -108,8 +116,8 @@ impl Squad {
                             separation(
                                 &unit,
                                 o,
-                                32.0 + if o.player().is_enemy() {
-                                    o.weapon_against(unit).max_range as f32
+                                32.0 + if o.player().is_enemy() && o.has_weapon_against(unit) {
+                                    128.0 + o.weapon_against(unit).max_range as f32
                                 } else {
                                     0.0
                                 },
@@ -201,6 +209,7 @@ impl Squad {
                 //     Color::Black,
                 // );
                 u.attack_position(self.target);
+                module.tracker.available_units.push(u);
             }
         }
     }

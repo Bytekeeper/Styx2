@@ -206,7 +206,6 @@ pub fn follow_path(
         }
     } else {
         let path = module.map.get_path(unit.position(), target);
-        dbg!(path.0.len(), path.1);
         let path = path.0;
         let (a, b) = match (path.get(0), path.get(1)) {
             (None, None) => (target, target),

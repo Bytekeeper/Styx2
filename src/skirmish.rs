@@ -208,7 +208,7 @@ impl Skirmishes {
     // TODO should be modified base on game state
     fn agent_value(a: &Agent) -> i32 {
         // Cost
-        let mut res = (a.unit_type.mineral_price() + 3 * a.unit_type.gas_price())
+        let mut res = (a.unit_type.mineral_price() + 3 * a.unit_type.gas_price() / 2)
             / (1 + a.unit_type.is_two_units_in_one_egg() as i32);
         assert!(res >= 0);
         res

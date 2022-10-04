@@ -54,13 +54,25 @@ impl MyModule {
             .cloned()
             .collect();
         // TODO take "last scouted time/frame" into account
-        let mut location_targets: Vec<_> = self
-            .game
-            .get_start_locations()
-            .iter()
-            .filter(|l| !self.game.is_explored(**l))
-            .cloned()
-            .collect();
+        let mut location_targets = self.bases.all();
+
+        let my_base = self
+            .forward_base()
+            .ok_or(FailureReason::misc("Base not found"))?
+            .tile_position();
+
+        location_targets.sort_by(|a, b| {
+            a.last_explored
+                .cmp(&b.last_explored)
+                .then_with(|| b.starting_location.cmp(&a.starting_location))
+                .then_with(|| {
+                    a.position
+                        .distance_squared(my_base)
+                        .cmp(&b.position.distance_squared(my_base))
+                })
+        });
+
+        let location_targets: Vec<_> = location_targets.iter().map(|b| b.position).collect();
         // TODO maybe consider scouting enemy expansions first?
         let mut potential_expansions: Vec<_> = self
             .map
@@ -69,12 +81,7 @@ impl MyModule {
             .map(|b| b.position)
             .filter(|l| !self.game.is_explored(*l))
             .collect();
-        let my_base = self
-            .forward_base()
-            .ok_or(FailureReason::misc("Base not found"))?
-            .tile_position();
 
-        location_targets.sort_by_key(|b| b.distance_squared(my_base));
         potential_expansions.sort_by_key(|b| b.distance_squared(my_base));
 
         for &base_loc in location_targets.iter().chain(potential_expansions.iter()) {
@@ -83,6 +90,8 @@ impl MyModule {
                 .iter()
                 .min_by_key(|u| {
                     self.estimate_frames_to(u, base_position)
+                        // Avoid using mining workers
+                        + if u.gathering() { 300 } else { 0 }
                         // We sent someone else there before? Nudge the search to use the same unit
                         + u.target_position().map(|p| p.distance(base_position) as u32 / 10).unwrap_or(0)
                 })
@@ -94,32 +103,32 @@ impl MyModule {
                     _ => (),
                 }
 
-                // let pos = best_scout.position();
-                // let mut boid_forces: Vec<_> = self
-                //     .units
-                //     .all_rstar
-                //     .locate_in_envelope_intersecting(&AABB::from_corners(
-                //         [pos.x - 300, pos.y - 300],
-                //         [pos.x + 300, pos.y + 300],
-                //     ))
-                //     .filter(|u| u.player().is_enemy() && u.has_weapon_against(&best_scout))
-                //     .map(|e| {
-                //         separation(
-                //             &best_scout,
-                //             e,
-                //             128.0 + e.weapon_against(&best_scout).max_range as f32,
-                //             1.0,
-                //         )
-                //     })
-                //     .collect();
-                // if boid_forces.iter().any(|it| it.weight > 0.1) {
-                //     // boid_forces.push(follow_path(self, &best_scout, base_position, 0.3));
-                //     boid_forces.push(climb(self, &best_scout, 32, 32, 2.0));
-                //     let target = self.positioning(&best_scout, &boid_forces);
-                //     best_scout.move_to(target);
-                // } else {
-                best_scout.move_to(base_position);
-                // }
+                let pos = best_scout.position();
+                let mut boid_forces: Vec<_> = self
+                    .units
+                    .all_in_range(&best_scout, 300)
+                    .filter(|u| u.player().is_enemy() && u.has_weapon_against(&best_scout))
+                    .map(|e| {
+                        separation(
+                            &best_scout,
+                            e,
+                            32.0 + if e.has_weapon_against(&best_scout) {
+                                128.0 + e.weapon_against(&best_scout).max_range as f32
+                            } else {
+                                0.0
+                            },
+                            1.0,
+                        )
+                    })
+                    .collect();
+                if boid_forces.iter().any(|it| it.weight > 0.1) {
+                    boid_forces.push(follow_path(self, &best_scout, base_position, 0.3));
+                    boid_forces.push(climb(self, &best_scout, 32, 32, 2.0));
+                    let target = self.positioning(&best_scout, &boid_forces);
+                    best_scout.move_to(target);
+                } else {
+                    best_scout.move_to(base_position);
+                }
                 scouts.retain(|s| {
                     s != &best_scout
                         && (!s.get_type().is_worker() || max_workers > 0)

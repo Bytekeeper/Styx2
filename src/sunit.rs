@@ -137,6 +137,20 @@ impl Units {
         self.all.remove(&unit.get_id());
     }
 
+    pub fn all_in_radius(
+        &self,
+        position: impl Into<Position>,
+        radius: i32,
+    ) -> impl Iterator<Item = &SUnit> + '_ {
+        let pos: Position = position.into();
+        self.all_rstar
+            .locate_in_envelope_intersecting(&AABB::from_corners(
+                [pos.x - radius, pos.y - radius],
+                [pos.x + radius, pos.y + radius],
+            ))
+            .filter(move |it| it.envelope().distance_2(&[pos.x, pos.y]) < radius * radius)
+    }
+
     pub fn all_in_range(
         &self,
         position: &impl RTreeObject<Envelope = AABB<[i32; 2]>>,
@@ -150,6 +164,13 @@ impl Units {
                 [upper[0] + range, upper[1] + range],
             ))
             .filter(move |it| it.envelope().distance_2(&aabb.center()) < range * range)
+    }
+
+    pub fn threats(&self, unit: &SUnit) -> Vec<SUnit> {
+        self.all_in_range(unit, 300)
+            .filter(|e| e.is_in_weapon_range(unit))
+            .cloned()
+            .collect()
     }
 }
 
@@ -452,6 +473,9 @@ impl SUnit {
             distance <= max_range + buffer
         } else {
             let wpn = self.weapon_against(other);
+            if wpn.weapon_type == WeaponType::None {
+                return false;
+            }
             let distance = self.distance_to(other);
             (wpn.min_range == 0 || wpn.min_range < distance) && distance <= wpn.max_range + buffer
         }

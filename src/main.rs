@@ -10,6 +10,7 @@ mod gathering;
 mod gms;
 mod grid;
 mod micro;
+mod sbase;
 mod scouting;
 mod skirmish;
 mod splayer;
@@ -26,6 +27,7 @@ use gathering::*;
 use gms::*;
 use rsbwapi::sma::*;
 pub use rsbwapi::*;
+use sbase::Bases;
 use scouting::*;
 use skirmish::*;
 use splayer::*;
@@ -59,10 +61,12 @@ impl FailureReason {
 pub struct MyModule {
     pub game: Game,
     pub units: Units,
+    pub bases: Bases,
     pub skirmishes: Skirmishes,
     pub players: Players,
     pub tracker: Tracker,
     pub map: Map,
+    pub strat: &'static dyn Fn(&mut MyModule) -> anyhow::Result<()>,
 }
 
 impl MyModule {
@@ -101,6 +105,20 @@ impl MyModule {
     pub fn is_in_narrow_choke(&self, tp: TilePosition) -> bool {
         // TODO
         false
+    }
+
+    pub fn has_requirements_for(&self, type_: UnitType) -> bool {
+        let self_ = self.game.self_().unwrap();
+
+        for it in type_.required_units() {
+            if !self_.has_unit_type_requirement(it.0, it.1) {
+                return false;
+            }
+        }
+        if type_.required_tech() != TechType::None && !self_.has_researched(type_.required_tech()) {
+            return false;
+        }
+        true
     }
 
     pub fn furthest_walkable_position(&self, from: Position, to: Position) -> Option<WalkPosition> {
@@ -341,11 +359,7 @@ impl MyModule {
 
         self.perform_attacking(AttackParams::default());
         self.perform_scouting(ScoutParams {
-            max_scouts: match self.game.enemy().map(|e| e.get_race()) {
-                Some(Race::Zerg) => 2,
-                Some(Race::Protoss) => 4,
-                _ => 3,
-            },
+            max_scouts: 5,
             ..ScoutParams::default()
         });
 
@@ -381,12 +395,12 @@ impl MyModule {
                     .unwrap_or(pos)
             })
             .unwrap_or(
-                self.game
-                    .get_start_locations()
-                    .iter()
-                    .min_by_key(|l| self.game.is_explored(**l))
-                    .map(|l| l.center())
-                    .unwrap(),
+                self.forward_base().unwrap().position(), // self.game
+                                                         //     .get_start_locations()
+                                                         //     .iter()
+                                                         //     .min_by_key(|l| self.game.is_explored(**l))
+                                                         //     .map(|l| l.center())
+                                                         //     .unwrap(),
             );
         // let mut x = target;
         // let mut path = self.map.get_path(base.position(), target).0;
@@ -431,36 +445,45 @@ impl MyModule {
         if self.count_pending_or_ready(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) < 2 {
             self.ensure_unit_count(UnitType::Zerg_Drone, 12);
         }
-        self.ensure_base_count(2);
-        self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
+        let x = self.ensure_base_count(2);
+        cvis().log(format!("{x:?}"));
         self.ensure_building_count(UnitType::Zerg_Extractor, 1);
-        self.ensure_unit_count(UnitType::Zerg_Drone, 12);
+        self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
+        self.ensure_unit_count(UnitType::Zerg_Drone, 15);
         self.ensure_building_count(UnitType::Zerg_Hydralisk_Den, 1);
-        if self.count_pending_or_ready(|u| u == UnitType::Zerg_Hydralisk) < 1 {
-            self.ensure_unit_count(UnitType::Zerg_Zergling, 4);
-        }
-        self.ensure_upgrade(UpgradeType::Grooved_Spines, 1);
         if self.count_completed(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) >= 2 {
             self.ensure_building_count(
                 UnitType::Zerg_Creep_Colony,
-                1_usize.min(2_usize.saturating_sub(
+                1_usize.min(1_usize.saturating_sub(
                     self.count_pending_or_ready(|ut| ut == UnitType::Zerg_Sunken_Colony),
                 )),
             );
-            self.ensure_building_count(UnitType::Zerg_Sunken_Colony, 2);
+            self.ensure_building_count(UnitType::Zerg_Sunken_Colony, 1);
         }
-        self.ensure_free_supply(2);
+        self.ensure_unit_count(UnitType::Zerg_Drone, 16);
+        self.ensure_free_supply(5);
+        self.ensure_upgrade(UpgradeType::Grooved_Spines, 1);
         self.ensure_unit_count(UnitType::Zerg_Hydralisk, 12);
         self.ensure_upgrade(UpgradeType::Muscular_Augments, 1);
-        self.ensure_unit_count(UnitType::Zerg_Hydralisk, 200);
-
+        self.pump(UnitType::Zerg_Hydralisk);
+        self.ensure_building_count(UnitType::Zerg_Evolution_Chamber, 1);
+        self.ensure_upgrade(UpgradeType::Zerg_Missile_Attacks, 3);
+        self.ensure_upgrade(UpgradeType::Zerg_Carapace, 3);
         self.ensure_gathering_gas(GatherParams {
             max_workers: 0.max(3 - self.game.self_().unwrap().gas() / 200),
             ..Default::default()
         });
-        self.perform_attacking(AttackParams::default());
+        self.perform_attacking(AttackParams {
+            min_army: 12,
+            ..Default::default()
+        });
         self.perform_scouting(ScoutParams {
-            max_workers: 0,
+            max_workers: self
+                .units
+                .mine_all
+                .iter()
+                .any(|ut| ut.get_type() == UnitType::Zerg_Hydralisk)
+                as i32,
             ..ScoutParams::default()
         });
         Ok(())
@@ -535,7 +558,8 @@ impl MyModule {
             unit.position().distance(target)
         } else {
             self.map.get_path(unit.position(), target).1 as f64
-        }) / unit.get_type().top_speed()) as u32
+        }) / unit.get_type().top_speed())
+        .ceil() as u32
     }
 }
 
@@ -554,6 +578,27 @@ impl AiModule for MyModule {
     fn on_start(&mut self, game: &Game) {
         *CVIS.lock().unwrap() = cherry_vis::implementation::CherryVis::new(game);
         self.map = Map::new(game);
+        self.bases = Bases::new(self);
+
+        let strategies: &[&dyn Fn(&mut MyModule) -> anyhow::Result<()>] =
+            match self.game.enemy().map(|e| e.get_race()) {
+                Some(Race::Protoss) => {
+                    &[&Self::two_hatch_hydra]
+                    // self.three_hatch_zergling();
+                    // self.two_hatch_hydra();
+                    // self.five_pool();
+                    // self.four_pool();
+                }
+                Some(Race::Terran) => &[&Self::four_pool],
+                Some(Race::Zerg) => &[&Self::opening_styx /* &Self::two_hatch_hydra*/],
+                _ => &[&Self::two_hatch_hydra],
+            };
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut rnd = oorandom::Rand32::new(time);
+        self.strat = strategies[rnd.rand_range(0..strategies.len() as u32) as usize];
         // for x in 0..50 {
         //     for y in 0..50 {
         //         cvis().draw_text(
@@ -627,6 +672,7 @@ impl AiModule for MyModule {
             let me = self.game.self_().unwrap();
             self.players.update(&self.game);
             self.units.update(&self.game, &self.players);
+            self.bases.update(&self.game);
             self.skirmishes = Skirmishes::new(self, &self.units.clusters);
             self.tracker.unrealized.clear();
             self.tracker.available_units = self
@@ -651,6 +697,23 @@ impl AiModule for MyModule {
                 .sum();
             //     let self_ = game.self_().unwrap();
             //
+            for b in self
+                .units
+                .my_completed
+                .iter()
+                .filter(|u| u.build_type().is_building())
+            {
+                let (build_pos, unit_type) = (b.target_position(), b.build_type());
+                if let Some(build_pos) = build_pos {
+                    CVIS.lock().unwrap().draw_rect(
+                        build_pos.x - unit_type.dimension_left(),
+                        build_pos.y - unit_type.dimension_up(),
+                        build_pos.x + unit_type.dimension_right(),
+                        build_pos.y + unit_type.dimension_down(),
+                        Color::Purple,
+                    );
+                }
+            }
 
             // Unstick
             for u in &self.units.my_completed {
@@ -702,25 +765,7 @@ impl AiModule for MyModule {
             }
 
             // self.opening_13_pool_muta();
-            match self.game.enemy().map(|e| e.get_race()) {
-                Some(Race::Protoss) => {
-                    self.two_hatch_hydra();
-                    // self.three_hatch_zergling();
-                    // self.two_hatch_hydra();
-                    // self.five_pool();
-                    // self.four_pool();
-                }
-                Some(Race::Terran) => {
-                    self.four_pool();
-                }
-                Some(Race::Zerg) => {
-                    // self.opening_styx();
-                    self.two_hatch_hydra();
-                }
-                _ => {
-                    self.two_hatch_hydra();
-                }
-            }
+            (self.strat)(self);
             // self.opening_styx();
             // self.opening_10hatch();
             // self.opening_9poolspire();
@@ -745,10 +790,12 @@ fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");
     rsbwapi::start(|game| MyModule {
         game: game.clone(),
+        bases: Bases::default(),
         units: Default::default(),
         players: Default::default(),
         tracker: Tracker::default(),
         map: Map::new(game),
         skirmishes: Default::default(),
+        strat: &MyModule::two_hatch_hydra,
     });
 }

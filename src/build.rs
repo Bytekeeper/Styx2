@@ -2,19 +2,34 @@ use crate::*;
 
 pub struct BuildParam {
     unit_type: UnitType,
-    at: Option<TilePosition>,
+    at: At,
+}
+
+pub enum At {
+    Anywhere,
+    TilePosition(TilePosition),
+    DefenseChoke,
 }
 
 impl BuildParam {
     pub fn build(unit_type: UnitType) -> Self {
         Self {
             unit_type,
-            at: None,
+            at: if matches!(
+                unit_type,
+                UnitType::Zerg_Creep_Colony
+                    | UnitType::Protoss_Photon_Cannon
+                    | UnitType::Terran_Bunker
+            ) {
+                At::DefenseChoke
+            } else {
+                At::Anywhere
+            },
         }
     }
 
     pub fn at(mut self, at: TilePosition) -> Self {
-        self.at = Some(at);
+        self.at = At::TilePosition(at);
         self
     }
 }
@@ -179,21 +194,16 @@ impl MyModule {
             self.tracker.available_gms,
             param.unit_type,
         ));
-        let base = if let Some(at) = param.at {
-            at
-        } else {
-            if matches!(
-                param.unit_type,
-                UnitType::Zerg_Creep_Colony
-                    | UnitType::Terran_Bunker
-                    | UnitType::Protoss_Photon_Cannon
-            ) {
-                self.forward_base()
-            } else {
-                self.main_base()
-            }
-            .map(|u| u.tile_position())
-            .ok_or(FailureReason::misc("No base found"))?
+        let base = match param.at {
+            At::TilePosition(at) => at,
+            At::DefenseChoke => self
+                .forward_base()
+                .ok_or(FailureReason::misc("Base not found"))?
+                .tile_position(),
+            At::Anywhere => self
+                .main_base()
+                .ok_or(FailureReason::misc("Base not found"))?
+                .tile_position(),
         };
         let builders: Vec<_> = self
             .tracker
@@ -203,19 +213,15 @@ impl MyModule {
             .cloned()
             .collect();
         let available_gms = self.tracker.available_gms;
+
+        // TODO This might send a worker although the tech is still missing (not order a build
+        // though)
         let order_build = self
             .tracker
             .available_gms
-            .checked_sub(param.unit_type.price());
+            .checked_sub(param.unit_type.price())
+            && self.has_requirements_for(param.unit_type);
 
-        // TODO can_make should be a "when can I make" in frames
-        if !self
-            .game
-            .can_make(None, param.unit_type)
-            .map_err(|e| FailureReason::misc(format!("{e:?}")))?
-        {
-            return Err(FailureReason::misc("Tech not available"));
-        }
         if param.unit_type.what_builds().0.is_building() {
             if order_build {
                 let builder = builders
@@ -261,18 +267,25 @@ impl MyModule {
                     self.game
                         .can_build_here(&b.unit, *p, param.unit_type, false)
                         .unwrap_or(false)
+                        && (!self
+                            .units
+                            .all_in_radius(p.center(), 128)
+                            .any(|it| it.get_type().is_resource_container())
+                            || !self
+                                .units
+                                .all_in_radius(p.center(), 128)
+                                .any(|it| it.get_type().is_resource_depot()))
                 })
-                .min_by_key(|(_, p)| {
-                    if param.unit_type == UnitType::Zerg_Creep_Colony {
-                        self.map
-                            .choke_points
-                            .iter()
-                            .map(|cp| p.distance_squared(cp.top.to_tile_position()))
-                            .min()
-                            .unwrap()
-                    } else {
-                        p.distance_squared(base)
-                    }
+                .min_by_key(|(_, p)| match param.at {
+                    At::TilePosition(at) => p.distance_squared(at),
+                    At::Anywhere => p.distance_squared(base),
+                    At::DefenseChoke => self
+                        .map
+                        .choke_points
+                        .iter()
+                        .map(|cp| p.distance_squared(cp.top.to_tile_position()))
+                        .min()
+                        .unwrap(),
                 })
                 .ok_or(FailureReason::misc("No build location found"))?
         };
@@ -284,7 +297,7 @@ impl MyModule {
         let build_pos =
             build_tile_pos.to_position() + param.unit_type.tile_size().to_position() / 2;
         // Account for some worker wiggling
-        let frames_to_start_build = self.estimate_frames_to(&builder, build_pos) + 48;
+        let frames_to_start_build = self.estimate_frames_to(&builder, build_pos) + 24;
         let future_gms = available_gms + self.estimate_gms(frames_to_start_build, 1);
         // CVIS.lock().unwrap().log_unit_frame(
         //     &builder,
@@ -305,7 +318,7 @@ impl MyModule {
                 build_pos.x,
                 build_pos.y,
                 format!(
-                    "Frames: {}, GMS: {},{}",
+                    "Frames: {}, MG: {}, {}",
                     frames_to_start_build, future_gms.minerals, future_gms.gas
                 ),
             );
@@ -323,7 +336,10 @@ impl MyModule {
             CVIS.lock().unwrap().draw_text(
                 build_pos.x,
                 build_pos.y,
-                format!("Frames: {}", frames_to_start_build),
+                format!(
+                    "Frames: {}, MG: {}, {}",
+                    frames_to_start_build, future_gms.minerals, future_gms.gas
+                ),
             );
             if builder
                 .target_position()
@@ -333,11 +349,12 @@ impl MyModule {
                 // Now this is indirection: According to PurpleWave, McRave found the (0,-7) to
                 // reduce wiggling (smaller values than 7 seem to work fine too, maybe this
                 // requires a test?)
-                builder.move_to(build_pos - (0, 3)).ok();
+                builder.move_to(build_pos - (0, 7)).ok();
             }
             let mut p = builder.position();
             let mut li: Option<usize> = None;
-            for cp in self.map.get_path(builder.position(), build_pos).0 {
+            let path = self.map.get_path(builder.position(), build_pos);
+            for cp in path.0 {
                 let top = cp.top.center();
                 cvis().draw_line(p.x, p.y, top.x, top.y, Color::Green);
                 if let Some(index) = li {
@@ -357,7 +374,7 @@ impl MyModule {
             cvis().draw_text(
                 (p.x + build_pos.x) / 2,
                 (p.y + build_pos.y) / 2,
-                format!("d: {:.2}", build_pos.distance(p)),
+                format!("d: {:.2} - sum: {}", build_pos.distance(p), path.1),
             );
         } else {
             CVIS.lock().unwrap().draw_rect(
