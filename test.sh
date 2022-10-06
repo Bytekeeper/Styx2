@@ -8,7 +8,7 @@
 # MAP='aiide/(3)Longinus2.scx'
 # MAP='aiide/(3)TauCross.scx'
 # MAP='aiide/(4)Andromeda.scx'
-MAP='aiide/(4)CircuitBreaker.scx'
+# MAP='aiide/(4)CircuitBreaker.scx'
 # MAP='aiide/(4)EmpireoftheSun.scm'
 # MAP='aiide/(4)FightingSpirit.scx'
 # MAP='aiide/(4)Fortress.scx'
