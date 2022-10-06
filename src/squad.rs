@@ -1,4 +1,3 @@
-use crate::boids::*;
 use crate::cherry_vis::*;
 use crate::combat_sim as cs;
 use crate::is_attacker;
@@ -19,7 +18,6 @@ impl Squad {
             None => return,
             Some(x) => x,
         };
-        let tracker = &mut module.tracker;
         let enemies: Vec<_> = module
             .units
             .enemy
@@ -32,10 +30,11 @@ impl Squad {
                 && c.cluster.units.iter().any(|it| {
                     it.player().is_me()
                         && it.get_type().is_building()
-                        && c.cluster
-                            .units
-                            .iter()
-                            .any(|e| e.player().is_enemy() && e.is_close_to_weapon_range(it, 64))
+                        && c.cluster.units.iter().any(|e| {
+                            !e.get_type().is_worker()
+                                && e.player().is_enemy()
+                                && e.is_close_to_weapon_range(it, 128)
+                        })
                 })
         });
         let base = base.position();
@@ -56,40 +55,30 @@ impl Squad {
             })
             .count()
             >= self.min_army;
-        cvis().log(format!("{has_minimum_required_army}"));
+        cvis().log(format!("min_army: {has_minimum_required_army}"));
         let mut fall_backers: Vec<&SUnit> = vec![];
         let mut attackers: Vec<&SUnit> = vec![];
         for s in module.skirmishes.skirmishes.iter() {
-            let building_defense_bonus = s
-                .cluster
-                .units
-                .iter()
-                .filter(|u| {
-                    u.player().is_me()
-                        && u.get_type().is_building()
-                        && enemies.iter().any(|e| e.is_close_to_weapon_range(u, 96))
-                })
-                .count()
-                * 200;
             let combat_eval =
-                s.combat_evaluation.to_i32() + self.value_bias + (building_defense_bonus as i32);
+                s.combat_evaluation.to_i32() + self.value_bias + s.potential_building_loss.my_dead;
             let should_attack = has_minimum_required_army && combat_eval == 0 || combat_eval > 0;
-            cvis().log(format!("{building_defense_bonus} {should_attack}"));
-            let units = s.cluster.units.iter().filter(|u| {
+            cvis().log(format!(
+                "building defense: {}, attack: {should_attack}",
+                s.potential_building_loss.my_dead
+            ));
+            let tracker = &mut module.tracker;
+            for unit in s.cluster.units.iter().filter(|u| {
                 u.get_type().can_move()
-                    && is_attacker(u)
-                    && tracker
-                        .available_units
-                        .iter()
-                        .position(|it| u == &it)
-                        .map(|i| tracker.available_units.swap_remove(i))
-                        .is_some()
-            });
-
-            if should_attack {
-                attackers.extend(units);
-            } else {
-                fall_backers.extend(units);
+                    && !u.get_type().is_worker()
+                    && tracker.try_reserve_unit(*u).is_some()
+            }) {
+                if is_attacker(unit) && should_attack {
+                    cvis().log_unit_frame(unit, format!("ATK {combat_eval}"));
+                    attackers.push(unit);
+                } else {
+                    cvis().log_unit_frame(unit, format!("FB {combat_eval}"));
+                    fall_backers.push(unit);
+                }
             }
         }
 
@@ -98,43 +87,58 @@ impl Squad {
             .iter()
             .chain(fall_backers.iter())
             .filter(|u| is_attacker(u))
-            .min_by_key(|u| module.map.get_path(u.position(), self.target).1)
-            .unwrap();
-        // TODO Overlords will end up here too, is that ok?
+            .min_by_key(|u| module.map.get_path(u.position(), self.target).1);
+        let vanguard = match vanguard {
+            Some(x) => x,
+            None => return, // TODO MEH
+        };
         for unit in fall_backers.iter() {
-            if enemies
-                .iter()
-                .any(|e| e.distance_to(*unit) < 300 && e.has_weapon_against(unit))
-            {
-                if unit.position().distance_squared(base) < 300 * 300 || unit.get_type().is_worker()
-                {
-                    let pos = unit.position();
-                    let mut boid_forces: Vec<_> = module
-                        .units
-                        .all_in_range(*unit, 300)
-                        .map(|o| {
-                            separation(
-                                &unit,
-                                o,
-                                32.0 + if o.player().is_enemy() && o.has_weapon_against(unit) {
-                                    128.0 + o.weapon_against(unit).max_range as f32
-                                } else {
-                                    0.0
-                                },
-                                1.0,
-                            )
-                        })
-                        .collect();
-                    if boid_forces.iter().any(|it| it.weight > 0.1) {
-                        boid_forces.push(climb(module, &unit, 32, 32, 1.0));
-                        let target = module.positioning(&unit, &boid_forces);
-                        unit.move_to(target);
-                    }
-                } else {
-                    unit.move_to(base);
-                }
-            } else if unit.distance_to(*vanguard) > 64 {
+            if enemies.iter().any(|e| e.frames_to_engage(unit, 32) < 48) {
+                module.flee(unit, base);
+            } else if unit.distance_to(*vanguard) > 64 || !unit.get_type().can_attack() {
                 unit.move_to(vanguard.position());
+            } else {
+                let target = module
+                    .units
+                    .all_in_range(*unit, 300)
+                    .filter(|e| {
+                        if !e.player().is_enemy() || e.has_weapon_against(unit) {
+                            return false;
+                        }
+                        let pos = if unit.is_in_weapon_range(e) {
+                            unit.position()
+                        } else {
+                            unit.position()
+                                - (unit.position() - e.position())
+                                    * unit.weapon_against(e).max_range
+                                    / e.position().distance(unit.position()) as i32
+                        };
+                        !module.units.all_in_range(*unit, 300).any(|e| {
+                            e.completed()
+                                && e.player().is_enemy()
+                                && e.weapon_against(unit).max_range
+                                    >= e.position().distance(pos) as i32
+                        })
+                    })
+                    .min_by_key(|u| {
+                        // Try to favor pylons a bit, that might be all that holds up a wall
+                        u.distance_to(*unit)
+                            + if u.get_type() != UnitType::Protoss_Pylon {
+                                128
+                            } else {
+                                0
+                            }
+                    });
+                if let Some(target) = target {
+                    cvis().draw_line(
+                        unit.position().x,
+                        unit.position().y,
+                        target.position().x,
+                        target.position().y,
+                        Color::Red,
+                    );
+                    module.engage(unit, target);
+                }
             }
         }
         let tracker = &mut module.tracker;
@@ -158,6 +162,9 @@ impl Squad {
         );
         let vanguard_position = uc.vanguard.position();
         let solution = module.select_targets(uc, enemies, self.target, false);
+        assert!(!attackers
+            .iter()
+            .any(|a| solution.iter().find(|(u, _)| &u == a).is_none()));
         for (u, t) in solution {
             // if u.position().distance_squared(vanguard_position) > 300 * 300 {
             //     u.move_to(vanguard_position);
@@ -170,36 +177,7 @@ impl Squad {
                 //     target.position().y,
                 //     Color::Red,
                 // );
-                assert!(u.exists());
-                // If close enough, engage!
-                // if u.distance_to(target) < 32 + u.weapon_against(target).max_range {
                 module.engage(&u, target);
-                // TODO Turns out, chokepoints are a styx complete problem....
-                // } else {
-                //     // Otherwise fan out a bit
-                //     let pos = u.position();
-                //     let mut boid_forces: Vec<_> = module
-                //         .units
-                //         .all_rstar
-                //         .locate_in_envelope_intersecting(&AABB::from_corners(
-                //             [pos.x - 300, pos.y - 300],
-                //             [pos.x + 300, pos.y + 300],
-                //         ))
-                //         .filter_map(|e| {
-                //             if e == target {
-                //                 // Lead enemy a bit, but home in
-                //                 Some(cohesion(&u, e, 24, 0.0, 1.0))
-                //             } else if e != &u {
-                //                 // Fan-out to reach enemies without blocking each other
-                //                 Some(separation(&u, e, 64.0, 0.5))
-                //             } else {
-                //                 None
-                //             }
-                //         })
-                //         .collect();
-                //     let target = module.positioning(&u, &boid_forces);
-                //     u.move_to(target);
-                // }
             } else if !u.attacking() {
                 // CVIS.lock().unwrap().draw_line(
                 //     u.position().x,
@@ -208,6 +186,7 @@ impl Squad {
                 //     self.target.y,
                 //     Color::Black,
                 // );
+                cvis().log_unit_frame(&u, format!("ATK POS {}", self.target));
                 u.attack_position(self.target);
                 module.tracker.available_units.push(u);
             }

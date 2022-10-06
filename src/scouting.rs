@@ -73,18 +73,8 @@ impl MyModule {
         });
 
         let location_targets: Vec<_> = location_targets.iter().map(|b| b.position).collect();
-        // TODO maybe consider scouting enemy expansions first?
-        let mut potential_expansions: Vec<_> = self
-            .map
-            .bases
-            .iter()
-            .map(|b| b.position)
-            .filter(|l| !self.game.is_explored(*l))
-            .collect();
 
-        potential_expansions.sort_by_key(|b| b.distance_squared(my_base));
-
-        for &base_loc in location_targets.iter().chain(potential_expansions.iter()) {
+        for base_loc in location_targets {
             let base_position = base_loc.to_position();
             let best_scout = scouts
                 .iter()
@@ -103,32 +93,7 @@ impl MyModule {
                     _ => (),
                 }
 
-                let pos = best_scout.position();
-                let mut boid_forces: Vec<_> = self
-                    .units
-                    .all_in_range(&best_scout, 300)
-                    .filter(|u| u.player().is_enemy() && u.has_weapon_against(&best_scout))
-                    .map(|e| {
-                        separation(
-                            &best_scout,
-                            e,
-                            32.0 + if e.has_weapon_against(&best_scout) {
-                                128.0 + e.weapon_against(&best_scout).max_range as f32
-                            } else {
-                                0.0
-                            },
-                            1.0,
-                        )
-                    })
-                    .collect();
-                if boid_forces.iter().any(|it| it.weight > 0.1) {
-                    boid_forces.push(follow_path(self, &best_scout, base_position, 0.3));
-                    boid_forces.push(climb(self, &best_scout, 32, 32, 2.0));
-                    let target = self.positioning(&best_scout, &boid_forces);
-                    best_scout.move_to(target);
-                } else {
-                    best_scout.move_to(base_position);
-                }
+                self.flee(&best_scout, base_position);
                 scouts.retain(|s| {
                     s != &best_scout
                         && (!s.get_type().is_worker() || max_workers > 0)

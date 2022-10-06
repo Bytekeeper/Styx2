@@ -70,6 +70,16 @@ pub struct MyModule {
 }
 
 impl MyModule {
+    // Relative "value" of an agent regarding other agents
+    // TODO should be modified base on game state
+    pub fn value_of(&self, unit_type: UnitType, _my_unit: bool) -> i32 {
+        // Cost
+        let mut res = (unit_type.mineral_price() + 3 * unit_type.gas_price() / 2)
+            / (1 + unit_type.is_two_units_in_one_egg() as i32);
+        assert!(res >= 0);
+        res
+    }
+
     // Find "most forward" of our bases
     pub fn forward_base(&self) -> Option<SUnit> {
         self.units
@@ -178,6 +188,11 @@ impl MyModule {
 
     pub fn has_pending_or_upgraded(&self, upgrade: UpgradeType, level: i32) -> bool {
         let self_ = self.game.self_().unwrap();
+        self_.get_upgrade_level(upgrade) == level - if self_.is_upgrading(upgrade) { 1 } else { 0 }
+    }
+
+    pub fn has_pending_upgraded_or_planned(&self, upgrade: UpgradeType, level: i32) -> bool {
+        let self_ = self.game.self_().unwrap();
         self_.get_upgrade_level(upgrade)
             == level
                 - if self_.is_upgrading(upgrade) { 1 } else { 0 }
@@ -194,6 +209,10 @@ impl MyModule {
             .mine_all
             .iter()
             .any(|u| check(u.build_type()) || check(u.get_type()))
+    }
+
+    pub fn has_pending_ready_or_planned(&self, check: impl Fn(UnitType) -> bool) -> bool {
+        self.has_pending_or_ready(&check)
             || self
                 .tracker
                 .unrealized
@@ -271,13 +290,13 @@ impl MyModule {
         Ok(())
     }
 
-    fn four_pool(&mut self) -> anyhow::Result<()> {
+    fn four_pool_aggressive(&mut self) -> anyhow::Result<()> {
         if self.tracker.available_gms.supply >= 0 && self.tracker.available_gms.supply <= 2 {
             self.do_extractor_trick(UnitType::Zerg_Zergling);
         }
         self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
         self.ensure_free_supply(2);
-        self.ensure_unit_count(UnitType::Zerg_Zergling, 100);
+        self.pump(UnitType::Zerg_Zergling);
 
         self.perform_scouting(ScoutParams {
             max_workers: 0,
@@ -445,8 +464,7 @@ impl MyModule {
         if self.count_pending_or_ready(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) < 2 {
             self.ensure_unit_count(UnitType::Zerg_Drone, 12);
         }
-        let x = self.ensure_base_count(2);
-        cvis().log(format!("{x:?}"));
+        self.ensure_base_count(2);
         self.ensure_building_count(UnitType::Zerg_Extractor, 1);
         self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
         self.ensure_unit_count(UnitType::Zerg_Drone, 15);
@@ -467,10 +485,16 @@ impl MyModule {
         self.ensure_upgrade(UpgradeType::Muscular_Augments, 1);
         self.pump(UnitType::Zerg_Hydralisk);
         self.ensure_building_count(UnitType::Zerg_Evolution_Chamber, 1);
-        self.ensure_upgrade(UpgradeType::Zerg_Missile_Attacks, 3);
-        self.ensure_upgrade(UpgradeType::Zerg_Carapace, 3);
+        self.ensure_upgrade(UpgradeType::Zerg_Carapace, 1);
+        self.ensure_upgrade(UpgradeType::Zerg_Missile_Attacks, 1);
         self.ensure_gathering_gas(GatherParams {
             max_workers: 0.max(3 - self.game.self_().unwrap().gas() / 200),
+            // Researched grooved spines? Full gathering
+            required_resources: if self.has_pending_or_upgraded(UpgradeType::Grooved_Spines, 1) {
+                999
+            } else {
+                0.max(UpgradeType::Grooved_Spines.gas_price(1) - self.game.self_().unwrap().gas())
+            },
             ..Default::default()
         });
         self.perform_attacking(AttackParams {
@@ -582,15 +606,9 @@ impl AiModule for MyModule {
 
         let strategies: &[&dyn Fn(&mut MyModule) -> anyhow::Result<()>] =
             match self.game.enemy().map(|e| e.get_race()) {
-                Some(Race::Protoss) => {
-                    &[&Self::two_hatch_hydra]
-                    // self.three_hatch_zergling();
-                    // self.two_hatch_hydra();
-                    // self.five_pool();
-                    // self.four_pool();
-                }
-                Some(Race::Terran) => &[&Self::four_pool],
-                Some(Race::Zerg) => &[&Self::opening_styx /* &Self::two_hatch_hydra*/],
+                Some(Race::Protoss) => &[&Self::two_hatch_hydra],
+                Some(Race::Terran) => &[&Self::four_pool_aggressive],
+                Some(Race::Zerg) => &[&Self::opening_styx, &Self::four_pool_aggressive],
                 _ => &[&Self::two_hatch_hydra],
             };
         let time = std::time::SystemTime::now()

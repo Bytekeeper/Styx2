@@ -16,6 +16,12 @@ pub struct Tracker {
 }
 
 impl Tracker {
+    pub fn try_reserve_unit(&mut self, to_id: impl Into<UnitId>) -> Option<SUnit> {
+        let id = to_id.into();
+        let i = self.available_units.iter().position(|u| u.id() == id)?;
+        Some(self.available_units.swap_remove(i))
+    }
+
     pub fn reserve_unit(&mut self, to_id: impl Into<UnitId>) -> SUnit {
         let id = to_id.into();
         let i = self

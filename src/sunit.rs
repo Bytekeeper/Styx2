@@ -481,6 +481,22 @@ impl SUnit {
         }
     }
 
+    pub fn frames_to_engage(&self, other: &SUnit, buffer: i32) -> i32 {
+        let wpn = self.weapon_against(other);
+        if wpn.weapon_type == WeaponType::None {
+            return std::i32::MAX;
+        }
+        if !self.get_type().can_move() {
+            return if self.is_close_to_weapon_range(other, buffer) {
+                0
+            } else {
+                std::i32::MAX
+            };
+        }
+        let distance_to_move = self.distance_to(other) - buffer - wpn.max_range;
+        0.max((distance_to_move as f64 / self.top_speed()) as i32)
+    }
+
     pub fn is_in_weapon_range(&self, other: &SUnit) -> bool {
         // TODO Is there really a marine in the bunker?
         if self.inner.borrow().type_ == UnitType::Terran_Bunker {

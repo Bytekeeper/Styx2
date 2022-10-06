@@ -186,7 +186,7 @@ impl MyModule {
         );
         assert!(
             param.unit_type.price().gas <= 0.max(self.tracker.available_gms.gas)
-                || self.has_pending_or_ready(|ut| ut.is_refinery()),
+                || self.has_pending_ready_or_planned(|ut| ut.is_refinery()),
             "Not enough gas to build {:?}, and no refinery planned or built!",
             param.unit_type
         );
@@ -269,11 +269,11 @@ impl MyModule {
                         .unwrap_or(false)
                         && (!self
                             .units
-                            .all_in_radius(p.center(), 128)
+                            .all_in_radius(p.center(), 96)
                             .any(|it| it.get_type().is_resource_container())
                             || !self
                                 .units
-                                .all_in_radius(p.center(), 128)
+                                .all_in_radius(p.center(), 112)
                                 .any(|it| it.get_type().is_resource_depot()))
                 })
                 .min_by_key(|(_, p)| match param.at {

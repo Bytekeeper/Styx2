@@ -25,7 +25,8 @@ impl MyModule {
         let mut aggregated_weight = 0.0;
         for &WeightedPosition { weight, position } in requests {
             aggregated_weight += weight;
-            aggregated_position += position * weight;
+            aggregated_position +=
+                position.clamp_length_max(12.0 * unit.top_speed() as f32) * weight;
         }
         if aggregated_weight < 0.0001 {
             return unit.position();
@@ -215,13 +216,22 @@ pub fn follow_path(
         };
         WeightedPosition {
             weight,
-            position: pos_to_vec2(a) * 0.95 + pos_to_vec2(b) * 0.05 - pos_to_vec2(pos),
+            position: pos_to_vec2(a) * 0.90 + pos_to_vec2(b) * 0.1 - pos_to_vec2(pos),
         }
     };
-    let t = Position {
-        x: result.position.x as i32,
-        y: result.position.y as i32,
-    } + unit.position();
+    if DRAW_FORCE_VECTORS {
+        let t = Position {
+            x: result.position.x as i32,
+            y: result.position.y as i32,
+        } + unit.position();
+        cvis().draw_line(
+            unit.position().x,
+            unit.position().y,
+            t.x,
+            t.y,
+            rsbwapi::Color::Brown,
+        );
+    }
     result
 }
 

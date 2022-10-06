@@ -16,6 +16,7 @@ pub struct Skirmish {
     pub cluster: Rc<Cluster>,
     pub engaged: bool,
     pub vanguard: Option<SUnit>,
+    pub potential_building_loss: SimResult,
 }
 
 #[derive(Debug)]
@@ -32,10 +33,10 @@ impl CombatEvaluation {
 }
 
 // These are not unit numbers! They are the sum of lost "value" per player
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SimResult {
-    my_dead: i32,
-    enemy_dead: i32,
+    pub my_dead: i32,
+    pub enemy_dead: i32,
 }
 
 impl SimResult {
@@ -127,7 +128,7 @@ impl Skirmishes {
                     .agents
                     .iter()
                     .filter(|u| !u.is_alive)
-                    .map(|u| Self::agent_value(u))
+                    .map(|u| module.value_of(u.unit_type, true))
                     .sum(),
                 enemy_dead: 0,
             };
@@ -137,14 +138,14 @@ impl Skirmishes {
                     .agents
                     .iter()
                     .filter(|u| !u.is_alive)
-                    .map(|u| Self::agent_value(u))
+                    .map(|u| module.value_of(u.unit_type, true))
                     .sum(),
                 enemy_dead: sim_attack
                     .player_b
                     .agents
                     .iter()
                     .filter(|u| !u.is_alive)
-                    .map(|u| Self::agent_value(u))
+                    .map(|u| module.value_of(u.unit_type, false))
                     .sum(),
             };
             let enemy_defending = SimResult {
@@ -153,14 +154,14 @@ impl Skirmishes {
                     .agents
                     .iter()
                     .filter(|u| !u.is_alive)
-                    .map(|u| Self::agent_value(u))
+                    .map(|u| module.value_of(u.unit_type, true))
                     .sum(),
                 enemy_dead: sim_enemy_defends
                     .player_b
                     .agents
                     .iter()
                     .filter(|u| !u.is_alive)
-                    .map(|u| Self::agent_value(u))
+                    .map(|u| module.value_of(u.unit_type, false))
                     .sum(),
             };
             let combat_evaluation = both_fighting.delta();
@@ -173,7 +174,28 @@ impl Skirmishes {
                             && (e.is_in_weapon_range(u) || u.is_in_weapon_range(e))
                     })
             });
+            let potential_building_loss = if engaged {
+                SimResult {
+                    my_dead: sim_attack
+                        .player_a
+                        .agents
+                        .iter()
+                        .filter(|u| u.unit_type.is_building())
+                        .map(|u| module.value_of(u.unit_type, true))
+                        .sum(),
+                    enemy_dead: sim_attack
+                        .player_b
+                        .agents
+                        .iter()
+                        .filter(|u| u.unit_type.is_building())
+                        .map(|u| module.value_of(u.unit_type, false))
+                        .sum(),
+                }
+            } else {
+                SimResult::default()
+            };
             skirmishes.push(Skirmish {
+                potential_building_loss,
                 combat_evaluation: CombatEvaluation {
                     me_fleeing,
                     enemy_defending,
@@ -202,15 +224,5 @@ impl Skirmishes {
         }
 
         Self { skirmishes }
-    }
-
-    // Relative "value" of an agent regarding other agents
-    // TODO should be modified base on game state
-    fn agent_value(a: &Agent) -> i32 {
-        // Cost
-        let mut res = (a.unit_type.mineral_price() + 3 * a.unit_type.gas_price() / 2)
-            / (1 + a.unit_type.is_two_units_in_one_egg() as i32);
-        assert!(res >= 0);
-        res
     }
 }
