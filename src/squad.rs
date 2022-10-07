@@ -122,7 +122,7 @@ impl Squad {
                     })
                     .min_by_key(|u| {
                         // Try to favor pylons a bit, that might be all that holds up a wall
-                        u.distance_to(*unit)
+                        u.position().distance(unit.position()) as i32
                             + if u.get_type() != UnitType::Protoss_Pylon {
                                 128
                             } else {
