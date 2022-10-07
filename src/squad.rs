@@ -102,7 +102,10 @@ impl Squad {
                     .units
                     .all_in_range(*unit, 300)
                     .filter(|e| {
-                        if !e.player().is_enemy() || e.has_weapon_against(unit) {
+                        if !e.player().is_enemy()
+                            || e.has_weapon_against(unit)
+                            || !unit.has_weapon_against(e)
+                        {
                             return false;
                         }
                         let pos = if unit.is_in_weapon_range(e) {
