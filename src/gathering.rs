@@ -118,38 +118,59 @@ impl MyModule {
                         .any(|b| b.tile_position().distance(m.tile_position()) < 9.0 * 9.0)
             })
             .collect();
-        for (u, &m) in self
+        let mut miners: Vec<_> = self
             .tracker
             .available_units
             .iter()
-            // TODO implement mineral locking
-            .filter(|u| u.get_type().is_worker() && !u.gathering_minerals())
-            .filter_map(|u| {
-                let m = minerals.iter().enumerate().min_by_key(|(_, m)| {
-                    m.position().distance_squared(u.position())
-                        + if m.being_gathered() { 90 } else { 0 }
-                });
-                if let Some((i, &m)) = m {
-                    minerals.swap_remove(i);
-                    Some((u, m))
-                } else {
-                    None
-                }
-            })
-        {
-            if (!u.gathering() || !u.carrying()) && u.target().as_ref() != Some(m) {
-                u.gather(m).ok();
-            }
-        }
-        let workers: Vec<_> = self
-            .tracker
-            .available_units
-            .iter()
-            .filter(|w| w.get_type().is_worker())
-            .map(|it| it.id())
+            .filter(|u| u.get_type().is_worker())
+            .cloned()
             .collect();
-        for w in workers {
+        for w in miners.iter() {
             self.tracker.reserve_unit(w);
+        }
+        miners.retain(|w| {
+            if w.get_order() == Order::MiningMinerals {
+                minerals.swap_remove(
+                    minerals
+                        .iter()
+                        .position(|m| Some(**m) == w.get_order_target().as_ref())
+                        .expect("Worker target mineral not found"),
+                );
+                return false;
+            } else if w.get_order() == Order::ReturnMinerals {
+                return false;
+            }
+            return true;
+        });
+
+        while !miners.is_empty() {
+            let miner_mineral = miners
+                .iter()
+                .enumerate()
+                .filter_map(|(i, u)| {
+                    minerals
+                        .iter()
+                        .enumerate()
+                        .map(|(j, m)| {
+                            (
+                                j,
+                                m,
+                                m.position().distance_squared(u.position())
+                                    + if m.being_gathered() { 90 } else { 0 },
+                            )
+                        })
+                        .min_by_key(|(_, m, d)| *d)
+                        .map(|(j, m, d)| (i, u, j, m, d))
+                })
+                .min_by_key(|(.., d)| *d);
+            if let Some((i, w, j, m, _)) = miner_mineral {
+                w.gather(m).ok();
+                miners.swap_remove(i);
+                minerals.swap_remove(j);
+            } else {
+                // TODO No minerals? Make workers attack as well I guess?
+                break;
+            }
         }
     }
 }

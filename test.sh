@@ -1,7 +1,7 @@
 #!/bin/bash -e 
 ./build.sh
 # MAP='aiide/(2)Benzene.scx'
-# MAP='aiide/(2)Destination.scx'
+MAP='aiide/(2)Destination.scx'
 # MAP='aiide/(2)HeartbreakRidge.scx'
 # MAP='aiide/(2)PolarisRhapsody.scx'
 # MAP='aiide/(3)Aztec.scx'

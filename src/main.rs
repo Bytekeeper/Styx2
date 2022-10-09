@@ -82,6 +82,7 @@ impl MyModule {
 
     // Find "most forward" of our bases
     pub fn forward_base(&self) -> Option<SUnit> {
+        // TODO Something is off here, bot builds "very forward" bases sometimes
         self.units
             .my_completed
             .iter()
@@ -378,7 +379,7 @@ impl MyModule {
 
         self.perform_attacking(AttackParams::default());
         self.perform_scouting(ScoutParams {
-            max_scouts: 5,
+            max_scouts: 5 - self.units.enemy.iter().any(|u| u.get_type().is_building()) as i32 * 3,
             ..ScoutParams::default()
         });
 
@@ -508,6 +509,7 @@ impl MyModule {
                 .iter()
                 .any(|ut| ut.get_type() == UnitType::Zerg_Hydralisk)
                 as i32,
+            max_scouts: 5 - self.units.enemy.iter().any(|u| u.get_type().is_building()) as i32 * 3,
             ..ScoutParams::default()
         });
         Ok(())

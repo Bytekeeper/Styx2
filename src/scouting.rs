@@ -92,7 +92,20 @@ impl MyModule {
                     UnitType::Zerg_Overlord => max_overlords -= 1,
                     _ => (),
                 }
-
+                if DRAW_SCOUT_TARGET {
+                    cvis().draw_line(
+                        best_scout.position().x,
+                        best_scout.position().y,
+                        base_position.x,
+                        base_position.y,
+                        Color::Brown,
+                    );
+                    cvis().draw_text(
+                        best_scout.position().x,
+                        best_scout.position().y - 10,
+                        format!("{}", self.estimate_frames_to(&best_scout, base_position)),
+                    );
+                }
                 self.flee(&best_scout, base_position);
                 scouts.retain(|s| {
                     s != &best_scout

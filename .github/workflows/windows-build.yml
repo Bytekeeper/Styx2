@@ -27,7 +27,7 @@ jobs:
         copy dist\run_proxy.bat .
     - uses: actions/upload-artifact@v3
       with:
-        name: styxz.zip
+        name: aiide
         path: |
           styx_z.exe
           LICENSE.md
@@ -36,3 +36,10 @@ jobs:
           src
           run_proxy.bat
           README.md
+    - uses: actions/upload-artifact@v3
+      with:
+        name: sscait
+        path: |
+          styx_z.exe
+          run_proxy.bat
+          BWAPI.dll
