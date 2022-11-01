@@ -1,1 +1,4 @@
 * Worker evade enemies
+* Crash? When no enemy buildings were found, but enemies? Game 00401 AIIDE2022
+* Own base under attack, but we're in enemy base? It stopped attacking in Game 00541 AIIDE2022
+* Build AA vs protoss (sairs) - and/or protect bulk of overlorlds

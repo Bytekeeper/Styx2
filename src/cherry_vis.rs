@@ -4,6 +4,8 @@ use rsbwapi::{Color, Game, Unit, UnitType};
 use std::panic::Location;
 use std::sync::Mutex;
 
+const LOG_FILTER: &[&'static str] = &[""];
+
 lazy_static! {
     pub static ref CVIS: Mutex<implementation::CherryVis> =
         Mutex::new(implementation::CherryVis::default());
@@ -205,8 +207,8 @@ pub mod implementation {
         #[track_caller]
         fn log_unit_frame(&mut self, unit: &SUnit, message: String) {
             let loc = Location::caller();
-            #[cfg(not(feature = "cvis_targeting"))]
-            if loc.file().ends_with("targeting.rs") {
+            let f_name = loc.file().rsplitn(2, "/").next().unwrap();
+            if LOG_FILTER.contains(&f_name) {
                 return;
             }
             self.units_logs
@@ -223,8 +225,8 @@ pub mod implementation {
         #[track_caller]
         fn log(&mut self, message: String) {
             let loc = Location::caller();
-            #[cfg(not(feature = "cvis_targeting"))]
-            if loc.file().ends_with("targeting.rs") {
+            let f_name = loc.file().rsplitn(2, "/").next().unwrap();
+            if LOG_FILTER.contains(&f_name) {
                 return;
             }
             self.logs.push(LogEntry {

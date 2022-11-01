@@ -59,6 +59,7 @@ impl Units {
             let mut inner = u.inner.borrow_mut();
             inner.is_visible = false;
             inner.exists = false;
+            inner.detected = false;
             inner.missing = game.is_visible(inner.position.to_tile_position());
         }
         self.all.retain(|_, u| {

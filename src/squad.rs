@@ -93,7 +93,7 @@ impl Squad {
             None => return, // TODO MEH
         };
         for unit in fall_backers.iter() {
-            if enemies.iter().any(|e| e.frames_to_engage(unit, 32) < 48) {
+            if enemies.iter().any(|e| e.frames_to_engage(unit, 64) < 48) {
                 module.flee(unit, base);
             } else if unit.distance_to(*vanguard) > 64 || !unit.get_type().can_attack() {
                 unit.move_to(vanguard.position());

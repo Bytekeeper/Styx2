@@ -131,7 +131,7 @@ pub struct Agent {
     can_unburrow: bool,
     burrowed: bool,
     burrowed_attacker: bool,
-    detected: bool,
+    pub detected: bool,
     stasis_timer: i32,
     size: UnitSize,
     is_melee: bool,
@@ -811,7 +811,7 @@ impl Script for Attacker {
 
         if let Some(target_index) = agent.attack_target {
             let enemy = &enemies[target_index];
-            if enemy.health > 0 {
+            if enemy.health > 0 && enemy.detected && !enemy.is_stasised() {
                 let distance_squared = distance_squared(agent, enemy);
                 selected_weapon = agent.weapon_vs(enemy);
                 if distance_squared >= selected_weapon.min_range_squared
@@ -1631,6 +1631,43 @@ mod test {
             },
             player_b: Player {
                 agents: vec![Agent::from(UnitType::Zerg_Sunken_Colony)],
+                script: Attacker::new(),
+            },
+            walkability: |x, y| true,
+        };
+
+        let frames = simulator.simulate_for(128);
+
+        assert_eq!(
+            simulator
+                .player_b
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            1
+        );
+        assert_eq!(
+            simulator
+                .player_a
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn dts_vs_hydras() {
+        let ling = Agent::from(UnitType::Zerg_Hydralisk).with_x(200);
+        let mut simulator = Simulator {
+            player_a: Player {
+                agents: vec![ling.clone()],
+                script: Attacker::new(),
+            },
+            player_b: Player {
+                agents: vec![Agent::from(UnitType::Protoss_Dark_Templar)],
                 script: Attacker::new(),
             },
             walkability: |x, y| true,

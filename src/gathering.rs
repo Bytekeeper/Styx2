@@ -166,7 +166,8 @@ impl MyModule {
             if let Some((i, w, j, m, _)) = miner_mineral {
                 w.gather(m).ok();
                 miners.swap_remove(i);
-                minerals.swap_remove(j);
+                // We might want multiple workers on one mineral
+                // minerals.swap_remove(j);
             } else {
                 // TODO No minerals? Make workers attack as well I guess?
                 break;

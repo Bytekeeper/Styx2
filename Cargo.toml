@@ -29,7 +29,6 @@ oorandom = "11"
 [features]
 # This will write files readable by cherryvis (see https://github.com/bmnielsen/cherryvis-docker for an ready-to-use container)
 cvis = ["zstd", "serde_json"]
-cvis_targeting = []
 
 [profile.release]
 #strip=true

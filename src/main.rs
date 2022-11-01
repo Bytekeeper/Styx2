@@ -414,6 +414,15 @@ impl MyModule {
                     .next()
                     .unwrap_or(pos)
             })
+            .or_else(|| {
+                self.units
+                    .enemy
+                    .iter()
+                    .min_by_key(|u| {
+                        self.estimate_frames_to(u, self.forward_base().unwrap().position())
+                    })
+                    .map(|u| u.position())
+            })
             .unwrap_or(
                 self.forward_base().unwrap().position(), // self.game
                                                          //     .get_start_locations()
@@ -477,11 +486,11 @@ impl MyModule {
                     self.count_pending_or_ready(|ut| ut == UnitType::Zerg_Sunken_Colony),
                 )),
             );
-            self.ensure_building_count(UnitType::Zerg_Sunken_Colony, 1);
         }
         self.ensure_unit_count(UnitType::Zerg_Drone, 16);
         self.ensure_free_supply(5);
         self.ensure_upgrade(UpgradeType::Grooved_Spines, 1);
+        self.ensure_building_count(UnitType::Zerg_Sunken_Colony, 1);
         self.ensure_unit_count(UnitType::Zerg_Hydralisk, 12);
         self.ensure_upgrade(UpgradeType::Muscular_Augments, 1);
         self.pump(UnitType::Zerg_Hydralisk);

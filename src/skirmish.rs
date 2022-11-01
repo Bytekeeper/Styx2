@@ -118,7 +118,10 @@ impl Skirmishes {
                     .player_b
                     .agents
                     .iter()
-                    .map(|a| format!("{:?}:{} a:{}\n", a.unit_type, a.id, a.is_alive))
+                    .map(|a| format!(
+                        "{:?}:{} a:{} d:{}\n",
+                        a.unit_type, a.id, a.is_alive, a.detected
+                    ))
                     .collect::<String>()
             ));
 
