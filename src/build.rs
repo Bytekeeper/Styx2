@@ -172,7 +172,7 @@ impl MyModule {
                     .iter()
                     .any(|base| base.distance_squared(candidate.position) < 49)
             })
-            .min_by_key(|b| b.position.distance_squared(base.to_tile_position()))
+            .min_by_key(|b| self.map.get_path(b.position.center(), base).1)
             .expect("Expansion location to exist");
         let pos = location.position;
         self.start_build(BuildParam::build(UnitType::Zerg_Hatchery).at(pos))

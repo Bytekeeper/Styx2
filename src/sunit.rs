@@ -60,7 +60,7 @@ impl Units {
             inner.is_visible = false;
             inner.exists = false;
             inner.detected = false;
-            inner.missing = game.is_visible(inner.position.to_tile_position());
+            inner.missing |= game.is_visible(inner.position.to_tile_position());
         }
         self.all.retain(|_, u| {
             let inner = u.inner.borrow();
@@ -124,7 +124,7 @@ impl Units {
         self.all_rstar = RTree::bulk_load(
             self.all
                 .values()
-                .filter(|it| !it.missing() && !it.player().is_neutral())
+                .filter(|it| !it.player().is_neutral())
                 .cloned()
                 .collect(),
         );

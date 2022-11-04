@@ -73,6 +73,11 @@ impl MyModule {
         });
 
         let location_targets: Vec<_> = location_targets.iter().map(|b| b.position).collect();
+        cvis().log(format!(
+            "Scouts: {}, targets: {}",
+            scouts.len(),
+            location_targets.len()
+        ));
 
         for base_loc in location_targets {
             let base_position = base_loc.to_position();

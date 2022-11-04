@@ -41,7 +41,7 @@ use upgrade::*;
 
 #[derive(Default)]
 pub struct AttackParams {
-    all_in: bool,
+    aggression_value: i32,
     min_army: usize,
 }
 
@@ -304,7 +304,7 @@ impl MyModule {
             ..ScoutParams::default()
         });
         self.perform_attacking(AttackParams {
-            all_in: true,
+            aggression_value: 400,
             ..Default::default()
         });
 
@@ -349,7 +349,7 @@ impl MyModule {
             });
         }
         self.perform_attacking(AttackParams {
-            all_in: true,
+            aggression_value: 400,
             ..Default::default()
         });
 
@@ -377,11 +377,11 @@ impl MyModule {
             ..Default::default()
         });
 
-        self.perform_attacking(AttackParams::default());
-        self.perform_scouting(ScoutParams {
-            max_scouts: 5 - self.units.enemy.iter().any(|u| u.get_type().is_building()) as i32 * 3,
-            ..ScoutParams::default()
+        self.perform_attacking(AttackParams {
+            aggression_value: 50,
+            ..Default::default()
         });
+        self.perform_scouting(ScoutParams::default());
 
         Ok(())
     }
@@ -398,7 +398,7 @@ impl MyModule {
         } else {
             anyhow::bail!("No base");
         };
-        let target = self
+        let Some(target) = self
             .units
             .enemy
             .iter()
@@ -418,19 +418,13 @@ impl MyModule {
                 self.units
                     .enemy
                     .iter()
+                    .filter(|it| it.get_type().can_move() && it.get_type().can_attack())
                     .min_by_key(|u| {
-                        self.estimate_frames_to(u, self.forward_base().unwrap().position())
+                            self.estimate_frames_to(u, self.forward_base().unwrap().position())
                     })
                     .map(|u| u.position())
-            })
-            .unwrap_or(
-                self.forward_base().unwrap().position(), // self.game
-                                                         //     .get_start_locations()
-                                                         //     .iter()
-                                                         //     .min_by_key(|l| self.game.is_explored(**l))
-                                                         //     .map(|l| l.center())
-                                                         //     .unwrap(),
-            );
+            }) else { anyhow::bail!("No enemies") };
+
         // let mut x = target;
         // let mut path = self.map.get_path(base.position(), target).0;
         // while let Some(next) = path.pop().map(|it| it.top.center()) {
@@ -449,8 +443,7 @@ impl MyModule {
         if !attackers.is_empty() {
             Squad {
                 target,
-                // If going all in, add some heavy value for combat
-                value_bias: if attack_params.all_in { 400 } else { 0 },
+                value_bias: attack_params.aggression_value,
                 min_army: attack_params.min_army,
             }
             .execute(self);

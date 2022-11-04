@@ -90,7 +90,14 @@ impl Squad {
             .min_by_key(|u| module.map.get_path(u.position(), self.target).1);
         let vanguard = match vanguard {
             Some(x) => x,
-            None => return, // TODO MEH
+            None => {
+                cvis().log(format!(
+                    "NO VANGUARD FB: {}, A: {}",
+                    fall_backers.len(),
+                    attackers.len()
+                ));
+                return;
+            } // TODO MEH
         };
         for unit in fall_backers.iter() {
             if enemies.iter().any(|e| e.frames_to_engage(unit, 64) < 48) {
@@ -189,7 +196,7 @@ impl Squad {
                 //     self.target.y,
                 //     Color::Black,
                 // );
-                cvis().log_unit_frame(&u, format!("ATK POS {}", self.target));
+                cvis().log_unit_frame(&u, format!("ATK POS {} S:{}", self.target, u.sleeping()));
                 u.attack_position(self.target);
                 module.tracker.available_units.push(u);
             }
