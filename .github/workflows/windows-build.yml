@@ -16,7 +16,9 @@ jobs:
 
     steps:
     - name: Install windows target
-      run: rustup target add i686-pc-windows-msvc
+      run: |
+        rustup update
+        rustup target add i686-pc-windows-msvc
     - uses: actions/checkout@v3
     - name: Build
       run: cargo build --verbose --target i686-pc-windows-msvc --release
