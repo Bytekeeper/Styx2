@@ -16,7 +16,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: egor-tensin/setup-mingw@v2
     - name: Install windows target
       run: |
         cargo install cross
