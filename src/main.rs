@@ -613,6 +613,7 @@ impl AiModule for MyModule {
                 Some(Race::Protoss) => &[&Self::two_hatch_hydra],
                 Some(Race::Terran) => &[&Self::four_pool_aggressive],
                 Some(Race::Zerg) => &[&Self::opening_styx, &Self::four_pool_aggressive],
+                // Some(Race::Zerg) => &[&Self::three_hatch_zergling],
                 _ => &[&Self::two_hatch_hydra],
             };
         let time = std::time::SystemTime::now()
@@ -810,6 +811,12 @@ impl AiModule for MyModule {
 
 fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");
+    // let guard = pprof::ProfilerGuardBuilder::default()
+    //     .frequency(1000)
+    //     .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+    //     .build()
+    //     .unwrap();
+
     rsbwapi::start(|game| MyModule {
         game: game.clone(),
         bases: Bases::default(),
@@ -820,4 +827,8 @@ fn main() {
         skirmishes: Default::default(),
         strat: &MyModule::two_hatch_hydra,
     });
+    // if let Ok(report) = guard.report().build() {
+    //     let file = std::fs::File::create("flamegraph.svg").unwrap();
+    //     report.flamegraph(file).unwrap();
+    // };
 }

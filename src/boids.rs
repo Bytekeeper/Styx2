@@ -36,32 +36,41 @@ impl MyModule {
 
         // If we somehow end up "not moving at all" - use the largest weighted position (TODO Probably
         // should use more than just that)
-        let target_position = unit.position()
-            + if aggregated_position.length_squared() < 1.0 {
-                let max_weight = requests
-                    .iter()
-                    .max_by_key(|wp| OrderedFloat(wp.weight))
-                    .unwrap()
-                    .position;
-                (max_weight.x.round() as i32, max_weight.y.round() as i32)
-            } else {
-                (
-                    aggregated_position.x.round() as i32,
-                    aggregated_position.y.round() as i32,
-                )
-            };
+        let delta_position = if aggregated_position.length_squared() < 1.0 {
+            let max_weight = requests
+                .iter()
+                .max_by_key(|wp| OrderedFloat(wp.weight))
+                .unwrap()
+                .position;
+            (max_weight.x.round() as i32, max_weight.y.round() as i32)
+        } else {
+            (
+                aggregated_position.x.round() as i32,
+                aggregated_position.y.round() as i32,
+            )
+        };
+        let target_position = unit.position() + delta_position;
         let result = if unit.flying() {
             target_position
         } else {
-            self.furthest_walkable_position(unit.position(), target_position)
-                .map(|p| {
-                    if p == target_position.to_walk_position() {
-                        target_position
-                    } else {
-                        p.center()
-                    }
-                })
-                .unwrap_or_else(|| unit.position())
+            let delta_position = pos_to_vec2(Position::new(delta_position.0, delta_position.1));
+            [
+                delta_position,
+                delta_position.perp(),
+                delta_position.perp() * -1.0,
+            ]
+            .into_iter()
+            .map(|p| Position::new(p.x as i32, p.y as i32))
+            .flat_map(|d| self.furthest_walkable_position(unit.position(), unit.position() + d))
+            .min_by_key(|pos| target_position.to_walk_position().distance_squared(*pos))
+            .map(|pos| {
+                if pos == target_position.to_walk_position() {
+                    target_position
+                } else {
+                    pos.center()
+                }
+            })
+            .unwrap_or(unit.position())
         };
         cvis().draw_line(
             target_position.x,
@@ -235,6 +244,6 @@ pub fn follow_path(
     result
 }
 
-fn pos_to_vec2(pos: Position) -> Vec2 {
+pub fn pos_to_vec2(pos: Position) -> Vec2 {
     Vec2::new(pos.x as f32, pos.y as f32)
 }

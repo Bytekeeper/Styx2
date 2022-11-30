@@ -24,6 +24,7 @@ impl MyModule {
                 )
             })
             .collect();
+        boid_forces.push(climb(self, unit, 32, 32, 2.0));
         // We divide by the amount to average the weight (to 2.0, not 1.0)
         let amount = boid_forces.len() as f32;
         for boid in boid_forces.iter_mut() {

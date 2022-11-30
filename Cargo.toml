@@ -25,6 +25,7 @@ glam="0.21"
 ordered-float="3"
 backtrace = "0.3"
 oorandom = "11"
+#pprof = { version = "0.11", features = ["flamegraph"] }
 
 [features]
 # This will write files readable by cherryvis (see https://github.com/bmnielsen/cherryvis-docker for an ready-to-use container)
@@ -33,3 +34,6 @@ cvis = ["zstd", "serde_json"]
 [profile.release]
 #strip=true
 lto=true
+
+[build-dependencies]
+static_vcruntime = "2.0"
