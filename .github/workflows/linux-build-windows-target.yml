@@ -20,6 +20,6 @@ jobs:
       run: rustup target add i686-pc-windows-gnu
     - uses: actions/checkout@v3
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --verbose --release
     - name: Run tests
       run: cargo test --verbose
