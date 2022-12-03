@@ -43,5 +43,4 @@ jobs:
         name: sscait
         path: |
           styx_z.exe
-          run_proxy.bat
           BWAPI.dll
