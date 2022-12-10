@@ -7,6 +7,7 @@ pub struct SBase {
     pub position: TilePosition,
     pub last_explored: i32,
     pub starting_location: bool,
+    pub elevation_level: i32,
 }
 
 #[derive(Default)]
@@ -31,6 +32,7 @@ impl Bases {
                             .get_start_locations()
                             .iter()
                             .any(|l| l.distance_squared(b.position) < 5 * 5),
+                        elevation_level: module.game.get_ground_height(b.position),
                     },
                 )
             })
@@ -40,8 +42,8 @@ impl Bases {
         result
     }
 
-    pub fn all(&self) -> Vec<&SBase> {
-        self.all.values().collect()
+    pub fn all(&self) -> impl Iterator<Item = &SBase> {
+        self.all.values()
     }
 
     pub fn update(&mut self, game: &Game) {

@@ -106,24 +106,26 @@ impl Skirmishes {
             let frames = sim_attack.simulate_for(8 * 24);
             sim_flee.simulate_for(8 * 24);
             sim_enemy_defends.simulate_for(8 * 24);
-            cvis().log(format!(
-                "f:{frames}\n{}\nvs\n{}",
-                sim_attack
-                    .player_a
-                    .agents
-                    .iter()
-                    .map(|a| format!("{:?}:{} a:{}\n", a.unit_type, a.id, a.is_alive))
-                    .collect::<String>(),
-                sim_attack
-                    .player_b
-                    .agents
-                    .iter()
-                    .map(|a| format!(
-                        "{:?}:{} a:{} d:{}\n",
-                        a.unit_type, a.id, a.is_alive, a.detected
-                    ))
-                    .collect::<String>()
-            ));
+            cvis().log(|| {
+                format!(
+                    "f:{frames}\n{}\nvs\n{}",
+                    sim_attack
+                        .player_a
+                        .agents
+                        .iter()
+                        .map(|a| format!("{:?}:{} a:{}\n", a.unit_type, a.id, a.is_alive))
+                        .collect::<String>(),
+                    sim_attack
+                        .player_b
+                        .agents
+                        .iter()
+                        .map(|a| format!(
+                            "{:?}:{} a:{} d:{}\n",
+                            a.unit_type, a.id, a.is_alive, a.detected
+                        ))
+                        .collect::<String>()
+                )
+            });
 
             let me_fleeing = SimResult {
                 my_dead: sim_flee

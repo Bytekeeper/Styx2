@@ -20,24 +20,28 @@ mod targeting;
 mod tracker;
 mod train;
 mod upgrade;
+mod util;
 
 use cherry_vis::*;
+use cluster::WithPosition;
 use config::*;
 use gathering::*;
 use gms::*;
+use grid::Grids;
 use rsbwapi::sma::*;
-pub use rsbwapi::*;
+use rsbwapi::*;
 use sbase::Bases;
 use scouting::*;
 use skirmish::*;
 use splayer::*;
 use squad::*;
 use std::borrow::Cow;
-pub use sunit::*;
+use sunit::*;
 use targeting::*;
 use tracker::*;
 use train::*;
 use upgrade::*;
+use util::*;
 
 #[derive(Default)]
 pub struct AttackParams {
@@ -65,6 +69,7 @@ pub struct MyModule {
     pub skirmishes: Skirmishes,
     pub players: Players,
     pub tracker: Tracker,
+    pub grids: Grids,
     pub map: Map,
     pub strat: &'static dyn Fn(&mut MyModule) -> anyhow::Result<()>,
 }
@@ -132,9 +137,9 @@ impl MyModule {
         true
     }
 
-    pub fn furthest_walkable_position(&self, from: Position, to: Position) -> Option<WalkPosition> {
+    pub fn furthest_walkable_position(&self, unit: &SUnit, to: Position) -> Option<WalkPosition> {
         let to = to.to_walk_position();
-        let mut from = from.to_walk_position();
+        let mut from = unit.position().to_walk_position();
         let mut last = None;
         let dx = (to.x - from.x).abs();
         let dy = -(to.y - from.y).abs();
@@ -142,7 +147,14 @@ impl MyModule {
         let sy = (from.y < to.y) as i32 * 2 - 1;
         let mut err = dx + dy;
         loop {
-            if !from.is_valid(&&self.game) || !self.game.is_walkable(from) {
+            if !from.is_valid(&&self.game)
+                || !self.game.is_walkable(from)
+                || self
+                    .grids
+                    .get_occupant(from)
+                    .map(|id| id != unit.id())
+                    .unwrap_or(false)
+            {
                 return last;
             }
             last = Some(from);
@@ -406,12 +418,10 @@ impl MyModule {
             .min_by_key(|u| self.map.get_path(base.position(), u.position()).1)
             .map(|u| {
                 let pos = u.position();
-                self.map
-                    .bases
-                    .iter()
+                self.bases.all()
+                    .filter(|b| b.elevation_level == u.elevation_level())
                     .map(|b| b.position.center())
-                    .filter(|b| b.distance_squared(pos) < 600 * 600)
-                    .next()
+                    .min_by_key(|b| self.map.get_path(*b, pos).1)
                     .unwrap_or(pos)
             })
             .or_else(|| {
@@ -423,7 +433,7 @@ impl MyModule {
                             self.estimate_frames_to(u, self.forward_base().unwrap().position())
                     })
                     .map(|u| u.position())
-            }) else { anyhow::bail!("No enemies") };
+            }) else { cvis().log(|| "No enemies left?".to_string());anyhow::bail!("No enemies") };
 
         // let mut x = target;
         // let mut path = self.map.get_path(base.position(), target).0;
@@ -484,6 +494,9 @@ impl MyModule {
         self.ensure_free_supply(5);
         self.ensure_upgrade(UpgradeType::Grooved_Spines, 1);
         self.ensure_building_count(UnitType::Zerg_Sunken_Colony, 1);
+
+        self.consider_air_defense();
+
         self.ensure_unit_count(UnitType::Zerg_Hydralisk, 12);
         self.ensure_upgrade(UpgradeType::Muscular_Augments, 1);
         self.pump(UnitType::Zerg_Hydralisk);
@@ -515,6 +528,25 @@ impl MyModule {
             ..ScoutParams::default()
         });
         Ok(())
+    }
+
+    /// Reaction to air harassment
+    fn consider_air_defense(&mut self) {
+        if self
+            .units
+            .enemy
+            .iter()
+            .any(|it| it.flying() && it.get_air_weapon().damage > 0)
+        {
+            self.ensure_building_count(UnitType::Zerg_Evolution_Chamber, 1);
+            self.ensure_building_count(
+                UnitType::Zerg_Creep_Colony,
+                1_usize.min(1_usize.saturating_sub(
+                    self.count_pending_or_ready(|ut| ut == UnitType::Zerg_Spore_Colony),
+                )),
+            );
+            self.ensure_building_count(UnitType::Zerg_Spore_Colony, 1);
+        }
     }
 
     fn three_hatch_zergling(&mut self) -> anyhow::Result<()> {
@@ -611,10 +643,7 @@ impl AiModule for MyModule {
         let strategies: &[&dyn Fn(&mut MyModule) -> anyhow::Result<()>] =
             match self.game.enemy().map(|e| e.get_race()) {
                 Some(Race::Protoss) => &[&Self::two_hatch_hydra],
-                Some(Race::Terran) => &[&Self::four_pool_aggressive],
-                Some(Race::Zerg) => &[&Self::opening_styx, &Self::four_pool_aggressive],
-                // Some(Race::Zerg) => &[&Self::three_hatch_zergling],
-                _ => &[&Self::two_hatch_hydra],
+                _ => &[&Self::four_pool_aggressive, &Self::two_hatch_hydra],
             };
         let time = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -695,6 +724,7 @@ impl AiModule for MyModule {
             let me = self.game.self_().unwrap();
             self.players.update(&self.game);
             self.units.update(&self.game, &self.players);
+            self.grids.update(&self.units);
             self.bases.update(&self.game);
             self.skirmishes = Skirmishes::new(self, &self.units.clusters);
             self.tracker.unrealized.clear();
@@ -787,11 +817,7 @@ impl AiModule for MyModule {
                 }
             }
 
-            // self.opening_13_pool_muta();
             (self.strat)(self);
-            // self.opening_styx();
-            // self.opening_10hatch();
-            // self.opening_9poolspire();
 
             // Always gather minerals with the remaining drones, can't imagine a situation where
             // this is a bad idea...
@@ -809,6 +835,7 @@ impl AiModule for MyModule {
     }
 }
 
+#[cfg(not(test))]
 fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");
     // let guard = pprof::ProfilerGuardBuilder::default()
@@ -826,6 +853,7 @@ fn main() {
         map: Map::new(game),
         skirmishes: Default::default(),
         strat: &MyModule::two_hatch_hydra,
+        grids: Grids::new(),
     });
     // if let Ok(report) = guard.report().build() {
     //     let file = std::fs::File::create("flamegraph.svg").unwrap();

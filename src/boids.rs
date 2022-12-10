@@ -1,4 +1,5 @@
 use crate::cherry_vis::*;
+use crate::cluster::WithPosition;
 use crate::config::*;
 use crate::{MyModule, SUnit};
 use glam::Vec2;
@@ -61,7 +62,7 @@ impl MyModule {
             ]
             .into_iter()
             .map(|p| Position::new(p.x as i32, p.y as i32))
-            .flat_map(|d| self.furthest_walkable_position(unit.position(), unit.position() + d))
+            .flat_map(|d| self.furthest_walkable_position(unit, unit.position() + d))
             .min_by_key(|pos| target_position.to_walk_position().distance_squared(*pos))
             .map(|pos| {
                 if pos == target_position.to_walk_position() {

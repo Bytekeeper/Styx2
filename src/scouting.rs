@@ -54,14 +54,14 @@ impl MyModule {
             .cloned()
             .collect();
         // TODO take "last scouted time/frame" into account
-        let mut location_targets = self.bases.all();
 
         let my_base = self
             .forward_base()
             .ok_or(FailureReason::misc("Base not found"))?
             .tile_position();
+        let mut bases: Vec<_> = self.bases.all().collect();
 
-        location_targets.sort_by(|a, b| {
+        bases.sort_by(|a, b| {
             a.last_explored
                 .cmp(&b.last_explored)
                 .then_with(|| b.starting_location.cmp(&a.starting_location))
@@ -71,13 +71,34 @@ impl MyModule {
                         .cmp(&b.position.distance_squared(my_base))
                 })
         });
+        let mut location_targets: Vec<_> = bases.iter().map(|b| b.position).collect();
 
-        let location_targets: Vec<_> = location_targets.iter().map(|b| b.position).collect();
-        cvis().log(format!(
-            "Scouts: {}, targets: {}",
-            scouts.len(),
-            location_targets.len()
-        ));
+        let mut close_to_my_units = bases;
+
+        // Crappy solution to
+        close_to_my_units.sort_by_key(|b| std::cmp::Reverse(b.last_explored));
+        location_targets.extend(
+            close_to_my_units
+                .iter()
+                .filter(|b| b.last_explored > 0)
+                .flat_map(|b| {
+                    Rectangle::new(b.position - (32, 32), b.position + (32, 32))
+                        .into_iter()
+                        .filter(|p| p.is_valid(&&self.game) && !self.game.is_visible(*p))
+                        .next()
+                }),
+        );
+
+        for t in location_targets.iter() {
+            cvis().draw_circle(t.x * 32, t.y * 32, 20, Color::Grey);
+        }
+        cvis().log(|| {
+            format!(
+                "Scouts: {}, targets: {}",
+                scouts.len(),
+                location_targets.len()
+            )
+        });
 
         for base_loc in location_targets {
             let base_position = base_loc.to_position();

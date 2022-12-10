@@ -240,7 +240,6 @@ impl MyModule {
         let (builder, build_tile_pos) = if param.unit_type.is_refinery() {
             self.units
                 .all()
-                .iter()
                 .filter(|u| u.get_type() == UnitType::Resource_Vespene_Geyser)
                 .map(|u| u.tile_position())
                 .min_by_key(|p| p.distance_squared(base))
@@ -269,7 +268,7 @@ impl MyModule {
                         .unwrap_or(false)
                         && (!self
                             .units
-                            .all_in_radius(p.center(), 96)
+                            .all_in_radius(p.center(), 100)
                             .any(|it| it.get_type().is_resource_container())
                             || !self
                                 .units

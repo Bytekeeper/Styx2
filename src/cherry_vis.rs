@@ -1,10 +1,8 @@
-use crate::SUnit;
+use crate::{SUnit, LOG_FILTER};
 use lazy_static::lazy_static;
 use rsbwapi::{Color, Game, Unit, UnitType};
 use std::panic::Location;
 use std::sync::Mutex;
-
-const LOG_FILTER: &[&'static str] = &[""];
 
 lazy_static! {
     pub static ref CVIS: Mutex<implementation::CherryVis> =
@@ -22,8 +20,8 @@ pub trait CherryVisOutput {
     fn draw_line(&mut self, ax: i32, ay: i32, bx: i32, by: i32, color: Color) {}
     fn draw_rect(&mut self, ax: i32, ay: i32, bx: i32, by: i32, color: Color) {}
     fn draw_circle(&mut self, x: i32, y: i32, radius: i32, color: Color) {}
-    fn log_unit_frame(&mut self, unit: &SUnit, message: String) {}
-    fn log(&mut self, message: String) {}
+    fn log_unit_frame(&mut self, unit: &SUnit, message: impl FnOnce() -> String) {}
+    fn log(&mut self, message: impl FnOnce() -> String) {}
 }
 
 pub fn cvis() -> std::sync::MutexGuard<'static, implementation::CherryVis> {
@@ -205,7 +203,7 @@ pub mod implementation {
         }
 
         #[track_caller]
-        fn log_unit_frame(&mut self, unit: &SUnit, message: String) {
+        fn log_unit_frame(&mut self, unit: &SUnit, message: impl FnOnce() -> String) {
             let loc = Location::caller();
             let f_name = loc.file().rsplitn(2, "/").next().unwrap();
             if LOG_FILTER.contains(&f_name) {
@@ -216,14 +214,14 @@ pub mod implementation {
                 .or_insert_with(|| vec![])
                 .push(LogEntry {
                     frame: self.frame,
-                    message: format!("{}:{} : {}", loc.line(), loc.file(), message),
+                    message: format!("{}:{} : {}", loc.line(), loc.file(), message()),
                     line: loc.line() as i32,
                     file: loc.file().to_owned(),
                 });
         }
 
         #[track_caller]
-        fn log(&mut self, message: String) {
+        fn log(&mut self, message: impl FnOnce() -> String) {
             let loc = Location::caller();
             let f_name = loc.file().rsplitn(2, "/").next().unwrap();
             if LOG_FILTER.contains(&f_name) {
@@ -231,7 +229,7 @@ pub mod implementation {
             }
             self.logs.push(LogEntry {
                 frame: self.frame,
-                message: format!("{}:{} : {}", loc.line(), loc.file(), message),
+                message: format!("{}:{} : {}", loc.line(), loc.file(), message()),
                 line: loc.line() as i32,
                 file: loc.file().to_owned(),
             });

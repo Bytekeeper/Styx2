@@ -55,28 +55,31 @@ impl Squad {
             })
             .count()
             >= self.min_army;
-        cvis().log(format!("min_army: {has_minimum_required_army}"));
+        cvis().log(|| format!("min_army: {has_minimum_required_army}"));
         let mut fall_backers: Vec<&SUnit> = vec![];
         let mut attackers: Vec<&SUnit> = vec![];
         for s in module.skirmishes.skirmishes.iter() {
             let combat_eval =
                 s.combat_evaluation.to_i32() + self.value_bias + s.potential_building_loss.my_dead;
             let should_attack = has_minimum_required_army && combat_eval == 0 || combat_eval > 0;
-            cvis().log(format!(
-                "building defense: {}, attack: {should_attack}",
-                s.potential_building_loss.my_dead
-            ));
+            cvis().log(|| {
+                format!(
+                    "building defense: {}, attack: {should_attack}",
+                    s.potential_building_loss.my_dead
+                )
+            });
             let tracker = &mut module.tracker;
             for unit in s.cluster.units.iter().filter(|u| {
                 u.get_type().can_move()
                     && !u.get_type().is_worker()
+                    && u.get_type() != UnitType::Zerg_Larva
                     && tracker.try_reserve_unit(*u).is_some()
             }) {
                 if is_attacker(unit) && should_attack {
-                    cvis().log_unit_frame(unit, format!("ATK {combat_eval}"));
+                    cvis().log_unit_frame(unit, || format!("ATK {combat_eval}"));
                     attackers.push(unit);
                 } else {
-                    cvis().log_unit_frame(unit, format!("FB {combat_eval}"));
+                    cvis().log_unit_frame(unit, || format!("FB {combat_eval}"));
                     fall_backers.push(unit);
                 }
             }
@@ -91,44 +94,48 @@ impl Squad {
         let vanguard = match vanguard {
             Some(x) => x,
             None => {
-                cvis().log(format!(
-                    "NO VANGUARD FB: {}, A: {}",
-                    fall_backers.len(),
-                    attackers.len()
-                ));
+                // TODO There really should be a vanguard
+                cvis().log(|| {
+                    format!(
+                        "NO VANGUARD FB: {}, A: {}",
+                        fall_backers.len(),
+                        attackers.len()
+                    )
+                });
                 return;
-            } // TODO MEH
+            }
         };
         for unit in fall_backers.iter() {
-            if enemies.iter().any(|e| e.frames_to_engage(unit, 64) < 48) {
-                module.flee(unit, base);
-            } else if unit.distance_to(*vanguard) > 64 || !unit.get_type().can_attack() {
+            let close_to_base = module.estimate_frames_to(unit, base) < 48;
+            if unit.get_type() == UnitType::Zerg_Overlord
+                || !close_to_base && enemies.iter().any(|e| e.frames_to_engage(unit, 64) < 48)
+            {
+                if !close_to_base {
+                    module.flee(unit, base);
+                }
+            } else if unit.distance_to(*vanguard) > 256 || !unit.get_type().can_attack() {
                 unit.move_to(vanguard.position());
             } else {
                 let target = module
                     .units
                     .all_in_range(*unit, 300)
                     .filter(|e| {
-                        if !e.player().is_enemy()
-                            || e.has_weapon_against(unit)
-                            || !unit.has_weapon_against(e)
-                        {
+                        if !e.player().is_enemy() || !unit.has_weapon_against(e) {
                             return false;
                         }
-                        let pos = if unit.is_in_weapon_range(e) {
-                            unit.position()
-                        } else {
-                            unit.position()
+                        unit.is_in_weapon_range(e) || {
+                            // Not in range, but maybe we could get closer without being attacked?
+                            let pos = unit.position()
                                 - (unit.position() - e.position())
                                     * unit.weapon_against(e).max_range
-                                    / e.position().distance(unit.position()) as i32
-                        };
-                        !module.units.all_in_range(*unit, 300).any(|e| {
-                            e.completed()
-                                && e.player().is_enemy()
-                                && e.weapon_against(unit).max_range
-                                    >= e.position().distance(pos) as i32
-                        })
+                                    / 1.max(e.position().distance(unit.position()) as i32);
+                            !module.units.all_in_range(*unit, 300).any(|e| {
+                                e.completed()
+                                    && e.player().is_enemy()
+                                    && e.weapon_against(unit).max_range
+                                        >= e.position().distance(pos) as i32
+                            })
+                        }
                     })
                     .min_by_key(|u| {
                         // Try to favor pylons a bit, that might be all that holds up a wall
@@ -170,6 +177,8 @@ impl Squad {
             self.target.y,
             Color::Blue,
         );
+        cvis().draw_circle(self.target.x, self.target.y, 40, Color::Blue);
+        cvis().log(|| format!("Squad target: {:?}", self.target));
         let vanguard_position = uc.vanguard.position();
         let solution = module.select_targets(uc, enemies, self.target, false);
         assert!(!attackers
@@ -196,7 +205,7 @@ impl Squad {
                 //     self.target.y,
                 //     Color::Black,
                 // );
-                cvis().log_unit_frame(&u, format!("ATK POS {} S:{}", self.target, u.sleeping()));
+                cvis().log_unit_frame(&u, || format!("ATK POS {} S:{}", self.target, u.sleeping()));
                 u.attack_position(self.target);
                 module.tracker.available_units.push(u);
             }

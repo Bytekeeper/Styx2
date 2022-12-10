@@ -204,11 +204,9 @@ impl MyModule {
                         if (path.1.saturating_sub(cluster.vanguard_dist_to_target)) > 700
                             && !unit.is_in_weapon_range(&cluster.vanguard)
                         {
-                            CVIS.lock().unwrap().log(format!(
-                                "Drop target {:?} {}",
-                                unit.get_type(),
-                                unit.id()
-                            ));
+                            CVIS.lock()
+                                .unwrap()
+                                .log(|| format!("Drop target {:?} {}", unit.get_type(), unit.id()));
                             return false;
                         }
                     }
@@ -253,14 +251,13 @@ impl MyModule {
             let mut filtered_targets = vec![];
 
             for target in targets.iter() {
-                CVIS.lock().unwrap().log_unit_frame(
-                    unit,
+                CVIS.lock().unwrap().log_unit_frame(unit, || {
                     format!(
                         "Start filtering: {:?} {}",
                         target.unit.get_type(),
                         target.unit.id(),
-                    ),
-                );
+                    )
+                });
                 if target.unit.get_type() == UnitType::Zerg_Larva
                     || target.unit.get_type() == UnitType::Zerg_Egg
                     || !unit.detected()
@@ -269,7 +266,7 @@ impl MyModule {
                 {
                     CVIS.lock()
                         .unwrap()
-                        .log_unit_frame(unit, "Drop".to_string());
+                        .log_unit_frame(unit, || "Drop".to_string());
                     continue;
                 }
 
@@ -279,14 +276,14 @@ impl MyModule {
                 {
                     CVIS.lock()
                         .unwrap()
-                        .log_unit_frame(unit, "Drop".to_string());
+                        .log_unit_frame(unit, || "Drop".to_string());
                     continue;
                 }
 
                 if !is_ranged && (target.unit.under_disruption_web() || target.unit.under_storm()) {
                     CVIS.lock()
                         .unwrap()
-                        .log_unit_frame(unit, "Drop".to_string());
+                        .log_unit_frame(unit, || "Drop".to_string());
                     continue;
                 }
 
@@ -297,7 +294,7 @@ impl MyModule {
                 if static_position && dist_to_range > 0 {
                     CVIS.lock()
                         .unwrap()
-                        .log_unit_frame(unit, "Drop".to_string());
+                        .log_unit_frame(unit, || "Drop".to_string());
                     continue;
                 }
 
@@ -305,7 +302,7 @@ impl MyModule {
                 if target.cliffed_tank && (dist_to_range > 0 || !target.unit.visible()) {
                     CVIS.lock()
                         .unwrap()
-                        .log_unit_frame(unit, "Drop".to_string());
+                        .log_unit_frame(unit, || "Drop".to_string());
                     continue;
                 }
 
@@ -319,7 +316,7 @@ impl MyModule {
                         {
                             CVIS.lock()
                                 .unwrap()
-                                .log_unit_frame(unit, "Drop".to_string());
+                                .log_unit_frame(unit, || "Drop".to_string());
                             continue;
                         }
                     }
@@ -338,7 +335,7 @@ impl MyModule {
                             if unit_dist < target_dist {
                                 CVIS.lock()
                                     .unwrap()
-                                    .log_unit_frame(unit, "Drop".to_string());
+                                    .log_unit_frame(unit, || "Drop".to_string());
                                 continue;
                             }
                         }
@@ -366,7 +363,7 @@ impl MyModule {
                 {
                     CVIS.lock()
                         .unwrap()
-                        .log_unit_frame(&attacker.unit, "Drop".to_string());
+                        .log_unit_frame(&attacker.unit, || "Drop".to_string());
                     continue;
                 }
 
@@ -417,18 +414,17 @@ impl MyModule {
 
             let distance_to_target_position = unit.position().distance(target_position);
             for potential_target in attacker.targets {
-                CVIS.lock().unwrap().log_unit_frame(
-                    &attacker.unit,
+                CVIS.lock().unwrap().log_unit_frame(&attacker.unit, || {
                     format!(
                         "Start Eval: {:?} {}",
                         potential_target.unit.get_type(),
                         potential_target.unit.id(),
-                    ),
-                );
+                    )
+                });
                 if potential_target.health_including_shields.get() <= 0 {
                     CVIS.lock()
                         .unwrap()
-                        .log_unit_frame(&attacker.unit, "Health dropout".to_string());
+                        .log_unit_frame(&attacker.unit, || "Health dropout".to_string());
                     continue;
                 }
                 // Initialize the score as a formula of the target priority and how far outside our attack range it is
@@ -549,7 +545,7 @@ impl MyModule {
 
                 CVIS.lock()
                     .unwrap()
-                    .log_unit_frame(&attacker.unit, format!("Score {}", score,));
+                    .log_unit_frame(&attacker.unit, || format!("Score {}", score,));
                 // See if this is the best target
                 // Criteria:
                 // - Score is higher
@@ -574,14 +570,13 @@ impl MyModule {
                 }
             }
 
-            CVIS.lock().unwrap().log_unit_frame(
-                &attacker.unit,
+            CVIS.lock().unwrap().log_unit_frame(&attacker.unit, || {
                 format!(
                     "Result {} {:?}",
                     best_score,
                     best_target.map(|t| (t.unit.id(), t.unit.get_type()))
-                ),
-            );
+                )
+            });
             // For carriers, avoid frequently switching targets
             if unit.get_type() == UnitType::Protoss_Carrier {
                 let current_target = get_current_target(unit);

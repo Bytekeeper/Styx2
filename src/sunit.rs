@@ -1,5 +1,5 @@
 use crate::cherry_vis::CherryVisOutput;
-use crate::cluster::{dbscan, Cluster};
+use crate::cluster::{dbscan, Cluster, WithPosition};
 use crate::splayer::*;
 use crate::MyModule;
 use crate::SupplyCounter;
@@ -50,8 +50,8 @@ impl Units {
         result
     }
 
-    pub fn all(&self) -> Vec<&SUnit> {
-        self.all.values().collect()
+    pub fn all(&self) -> impl Iterator<Item = &SUnit> {
+        self.all.values()
     }
 
     pub fn update(&mut self, game: &Game, players: &Players) {
@@ -66,6 +66,10 @@ impl Units {
             let inner = u.inner.borrow();
             !inner.missing || inner.type_.is_flying_building() || !inner.type_.is_building()
         });
+        debug_assert!(!self
+            .all
+            .values()
+            .any(|it| it.missing() && it.get_type().is_building()));
         for u in game.get_all_units() {
             let new_unit_info = UnitInfo::new(game, &u);
             let unit = self
@@ -124,11 +128,11 @@ impl Units {
         self.all_rstar = RTree::bulk_load(
             self.all
                 .values()
-                .filter(|it| !it.player().is_neutral())
+                .filter(|it| !it.player().is_neutral() && !it.missing())
                 .cloned()
                 .collect(),
         );
-        self.clusters = dbscan(&self.all_rstar, 400, 4)
+        self.clusters = dbscan(&self.all_rstar, 392, 4)
             .into_iter()
             .map(Rc::new)
             .collect();
@@ -204,6 +208,12 @@ pub struct SUnit {
 impl std::hash::Hash for SUnit {
     fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
         self.id().hash(hasher);
+    }
+}
+
+impl WithPosition for SUnit {
+    fn position(&self) -> Position {
+        self.inner.borrow().position
     }
 }
 
@@ -418,10 +428,6 @@ impl SUnit {
         self.inner.borrow().tile_position
     }
 
-    pub fn position(&self) -> Position {
-        self.inner.borrow().position
-    }
-
     pub fn distance_to(&self, o: impl borrow::Borrow<SUnit>) -> i32 {
         self.unit.get_distance(&o.borrow().unit)
     }
@@ -500,15 +506,19 @@ impl SUnit {
 
     pub fn is_in_weapon_range(&self, other: &SUnit) -> bool {
         // TODO Is there really a marine in the bunker?
-        if self.inner.borrow().type_ == UnitType::Terran_Bunker {
+        let mut max_range = if self.inner.borrow().type_ == UnitType::Terran_Bunker {
             let wpn = UnitType::Terran_Marine.ground_weapon();
 
-            let max_range = wpn.max_range();
-            let distance = self.distance_to(other);
-            distance <= max_range
+            wpn.max_range()
         } else {
-            self.unit.is_in_weapon_range(&other.unit)
-        }
+            let wpn = self.weapon_against(other);
+            if wpn.weapon_type == WeaponType::None {
+                return false;
+            }
+            wpn.max_range
+        };
+        let distance = self.distance_to(other);
+        distance <= max_range
     }
 
     pub fn upgrade(&self, ut: UpgradeType) -> BwResult<bool> {

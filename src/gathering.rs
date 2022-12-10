@@ -109,7 +109,6 @@ impl MyModule {
             .collect();
 
         let mut minerals: Vec<_> = units
-            .iter()
             .filter(|m| {
                 m.get_type().is_mineral_field()
                     && m.visible()
@@ -133,7 +132,7 @@ impl MyModule {
                 minerals.swap_remove(
                     minerals
                         .iter()
-                        .position(|m| Some(**m) == w.get_order_target().as_ref())
+                        .position(|m| Some(*m) == w.get_order_target().as_ref())
                         .expect("Worker target mineral not found"),
                 );
                 return false;

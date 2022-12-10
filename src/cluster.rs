@@ -1,10 +1,36 @@
 use crate::sunit::SUnit;
 use ahash::*;
+use rsbwapi::Position;
 use rstar::{RTree, RTreeObject, AABB};
 
 const NOISE: usize = std::usize::MAX;
 
+pub trait WithPosition {
+    fn position(&self) -> Position;
+}
+
 pub fn dbscan(elements: &RTree<SUnit>, eps: i32, min_pts: usize) -> Vec<Cluster> {
+    for x in elements.iter() {
+        let dim = x.dimensions();
+        assert!(dim.tl.x >= 0 && dim.br.x >= 0);
+        assert!(dim.tl.y >= 0 && dim.br.y >= 0);
+        assert!(dim.br.x > dim.tl.x);
+        assert!(dim.br.y > dim.tl.y);
+        assert!(dim.br.x - dim.tl.x < 164);
+        assert!(dim.br.y - dim.tl.y < 164);
+    }
+    let (labeled, max_cluster) = label_items(elements, eps, min_pts);
+    post_process_clusters(labeled, max_cluster)
+}
+
+fn label_items<
+    'a,
+    T: RTreeObject<Envelope = AABB<[i32; 2]>> + core::hash::Hash + core::cmp::Eq + WithPosition,
+>(
+    elements: &'a RTree<T>,
+    eps: i32,
+    min_pts: usize,
+) -> (AHashMap<&'a T, usize>, usize) {
     let mut label = AHashMap::new();
     let mut c = 0;
     for element in elements {
@@ -42,10 +68,7 @@ pub fn dbscan(elements: &RTree<SUnit>, eps: i32, min_pts: usize) -> Vec<Cluster>
                     ))
                     .collect();
                 if new_neighbors.len() >= min_pts {
-                    neighbors.extend(
-                        new_neighbors, // TODO maybe we can get away without this?
-                                       // .filter(|u| u.position().distance_squared(element.position()) <= eps * eps),
-                    );
+                    neighbors.extend(new_neighbors);
                 }
             }
         }
@@ -57,8 +80,15 @@ pub fn dbscan(elements: &RTree<SUnit>, eps: i32, min_pts: usize) -> Vec<Cluster>
             label.insert(e, c);
         }
     }
-    let mut clusters = vec![Cluster::default(); c];
-    for (k, v) in label.drain() {
+    (label, c)
+}
+
+fn post_process_clusters<'a>(
+    mut labeled: AHashMap<&'a SUnit, usize>,
+    max_cluster: usize,
+) -> Vec<Cluster> {
+    let mut clusters = vec![Cluster::default(); max_cluster];
+    for (k, v) in labeled.drain() {
         clusters[v - 1].units.push(k.clone());
     }
     for c in clusters.iter_mut() {
@@ -105,8 +135,65 @@ pub fn dbscan(elements: &RTree<SUnit>, eps: i32, min_pts: usize) -> Vec<Cluster>
     clusters
 }
 
-#[derive(Clone, Default, Debug)]
-pub struct Cluster {
-    pub units: Vec<SUnit>,
+#[derive(Clone, Debug)]
+pub struct Cluster<T = SUnit> {
+    pub units: Vec<T>,
     pub b: f32,
+}
+
+impl<T> Default for Cluster<T> {
+    fn default() -> Self {
+        Self {
+            units: vec![],
+            b: 0.0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Hash, PartialEq, Eq, Debug)]
+    struct TestEntity(Position);
+
+    impl WithPosition for TestEntity {
+        fn position(&self) -> Position {
+            self.0
+        }
+    }
+
+    impl RTreeObject for TestEntity {
+        type Envelope = AABB<[i32; 2]>;
+
+        fn envelope(&self) -> Self::Envelope {
+            AABB::from_corners(
+                [self.0.x - 10, self.0.y - 10],
+                [self.0.x + 10, self.0.y + 10],
+            )
+        }
+    }
+
+    #[test]
+    fn function_name_test() {
+        let mut rnd = oorandom::Rand32::new(1);
+        for _ in 0..1000 {
+            let mut test_entities: RTree<TestEntity> = RTree::new();
+            for _ in 0..rnd.rand_range(20..40) {
+                test_entities.insert(TestEntity(Position::new(
+                    100 + rnd.rand_range(0..300) as i32,
+                    0 + rnd.rand_range(0..300) as i32,
+                )));
+            }
+            for _ in 0..rnd.rand_range(20..40) {
+                test_entities.insert(TestEntity(Position::new(
+                    300 + rnd.rand_range(0..300) as i32,
+                    1000 + rnd.rand_range(0..300) as i32,
+                )));
+            }
+
+            let (labels, max_cluster) = label_items(&test_entities, 400, 4);
+            assert_eq!(max_cluster, 2, "{:?}", labels.keys());
+        }
+    }
 }

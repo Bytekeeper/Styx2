@@ -1,4 +1,5 @@
 use crate::cherry_vis::*;
+use crate::cluster::WithPosition;
 use crate::{boids::*, MyModule, SUnit};
 use rsbwapi::{Position, UnitType};
 use rstar::AABB;
@@ -24,7 +25,6 @@ impl MyModule {
                 )
             })
             .collect();
-        boid_forces.push(climb(self, unit, 32, 32, 2.0));
         // We divide by the amount to average the weight (to 2.0, not 1.0)
         let amount = boid_forces.len() as f32;
         for boid in boid_forces.iter_mut() {
@@ -32,7 +32,7 @@ impl MyModule {
         }
         if boid_forces.iter().any(|it| it.weight > 0.1) {
             if !unit.flying() {
-                boid_forces.push(climb(self, &unit, 32, 32, 1.0));
+                boid_forces.push(climb(self, &unit, 32, 32, 4.0));
             }
             boid_forces.push(follow_path(self, unit, toward, 1.0));
             let target = self.positioning(&unit, &boid_forces);
@@ -43,7 +43,7 @@ impl MyModule {
     }
 
     pub fn engage(&self, unit: &SUnit, enemy: &SUnit) {
-        cvis().log_unit_frame(unit, format!("ENG i{}", enemy.id()));
+        cvis().log_unit_frame(unit, || format!("ENG i{}", enemy.id()));
         let my_weapon = unit.weapon_against(enemy);
         let enemy_weapon = enemy.weapon_against(unit);
         let longer_range_and_not_slower = unit.top_speed() > 0.5

@@ -1,3 +1,4 @@
+use crate::cluster::WithPosition;
 use crate::{stop_frames, SUnit};
 use fixed::types::I24F8;
 use rsbwapi::{ExplosionType, Race, UnitSizeType, UnitType, WeaponType};
@@ -151,15 +152,16 @@ impl Agent {
         let unit_type = unit.get_type();
         let ground_weapon = unit.get_ground_weapon();
         let air_weapon = unit.get_air_weapon();
-        let player = &unit.player().player;
+        let splayer = &unit.player();
+        let player = &splayer.player;
         let detected = unit.detected();
         // TODO SUnit should have the correct values already!
         let base = Self::from_unit_type(
             unit_type,
             player.get_upgrade_level(ground_weapon.weapon_type.upgrade_type()),
             player.get_upgrade_level(air_weapon.weapon_type.upgrade_type()),
-            0,
-            0,
+            player.weapon_range_extension(ground_weapon.weapon_type),
+            player.weapon_range_extension(air_weapon.weapon_type),
             unit.has_speed_upgrade(),
             false,
             false,
@@ -309,7 +311,7 @@ impl Agent {
             max_energy: I24F8::from_num(
                 unit_type.max_energy() + if energy_upgrade { 50 } else { 0 },
             ),
-            detected: true,
+            detected: !unit_type.has_permanent_cloak(),
             burrowed_attacker: unit_type == UnitType::Zerg_Lurker,
             base_speed: unit_type.top_speed() as f32,
             speed_factor: 1.0,
@@ -506,8 +508,8 @@ impl Agent {
             self.y = ny;
         } else {
             // TODO: We simulate "chokes" by slowing down units, is that ok?
-            self.x = (self.x + nx) / 2;
-            self.y = (self.y + ny) / 2;
+            self.x = (self.x * 2 + nx) / 3;
+            self.y = (self.y * 2 + ny) / 3;
         }
     }
 }
@@ -862,7 +864,6 @@ impl Script for Attacker {
                 }
             }
         }
-
         let weapon = *selected_weapon;
         agent.attack_target = selected_enemy;
         // eprintln!(
@@ -873,6 +874,7 @@ impl Script for Attacker {
             return flee(agent, enemies);
         }
         let selected_enemy = selected_enemy.unwrap();
+        assert!(enemies[selected_enemy].unit_type != UnitType::Protoss_Dark_Templar);
 
         if selected_distance_squared <= weapon.max_range_squared {
             if agent.burrowed_attacker != agent.burrowed {
@@ -1660,10 +1662,10 @@ mod test {
 
     #[test]
     fn dts_vs_hydras() {
-        let ling = Agent::from(UnitType::Zerg_Hydralisk).with_x(200);
+        let hydra = Agent::from(UnitType::Zerg_Hydralisk);
         let mut simulator = Simulator {
             player_a: Player {
-                agents: vec![ling.clone()],
+                agents: vec![hydra; 20],
                 script: Attacker::new(),
             },
             player_b: Player {
@@ -1683,15 +1685,6 @@ mod test {
                 .filter(|u| u.is_alive)
                 .count(),
             1
-        );
-        assert_eq!(
-            simulator
-                .player_a
-                .agents
-                .iter()
-                .filter(|u| u.is_alive)
-                .count(),
-            0
         );
     }
 

@@ -1,4 +1,4 @@
-use crate::Units;
+use crate::{boxed_array, Units};
 use rsbwapi::*;
 
 #[derive(Copy, Clone)]
@@ -16,12 +16,13 @@ impl<T: Copy, const N: usize> Grid<T, N> {
     pub fn new(default: T) -> Self {
         Self {
             version: 1,
-            tiles: Box::new(
-                [[Tile {
+            tiles: boxed_array(vec![
+                [Tile {
                     version: 0,
-                    item: default,
-                }; N]; N],
-            ),
+                    item: default
+                }; N];
+                N
+            ]),
         }
     }
 
@@ -38,11 +39,19 @@ impl<T: Copy, const N: usize> Grid<T, N> {
         }
     }
 
+    pub fn get_pos<const M: i32>(&self, pos: ScaledPosition<M>) -> Option<&T> {
+        self.get(pos.x as usize, pos.y as usize)
+    }
+
     pub fn set(&mut self, x: usize, y: usize, item: T) {
         self.tiles[y][x] = Tile {
             version: self.version,
             item,
         };
+    }
+
+    pub fn set_pos<const M: i32>(&mut self, pos: ScaledPosition<M>, item: T) {
+        self.set(pos.x as usize, pos.y as usize, item);
     }
 
     pub fn modify_in_range(
@@ -82,41 +91,59 @@ impl<T: Copy, const N: usize> Grid<T, N> {
 }
 
 pub struct Grids {
-    pub ground_threat: Grid<u16, 256>,
-    pub air_threat: Grid<u16, 256>,
+    // pub ground_threat: Grid<u16, 256>,
+    // pub air_threat: Grid<u16, 256>,
+    pub unit_walkability: Grid<UnitId, { 256 * 8 }>,
 }
 
 impl Grids {
     pub fn new() -> Self {
         Self {
-            ground_threat: Grid::new(0),
-            air_threat: Grid::new(0),
+            // ground_threat: Grid::new(0),
+            // air_threat: Grid::new(0),
+            unit_walkability: Grid::new(UnitId::MAX),
         }
     }
 
+    pub fn get_occupant(&self, pos: WalkPosition) -> Option<UnitId> {
+        self.unit_walkability.get_pos(pos).copied()
+    }
+
     pub fn update(&mut self, units: &Units) {
-        self.ground_threat.reset();
-        self.air_threat.reset();
-        for e in &units.enemy {
-            let (x, y) = e.tile_position().into();
-            let range = (e.get_ground_weapon().max_range + 31) / 32;
-            if e.get_type().ground_weapon() != WeaponType::None {
-                self.ground_threat.modify_in_range(
-                    x as usize,
-                    y as usize,
-                    range as usize,
-                    |i, _, _| i.unwrap_or(0) + 1,
-                );
-            }
-            if e.get_type().air_weapon() != WeaponType::None {
-                self.air_threat.modify_in_range(
-                    x as usize,
-                    y as usize,
-                    range as usize,
-                    |i, _, _| i.unwrap_or(0) + 1,
-                );
+        // self.ground_threat.reset();
+        // self.air_threat.reset();
+        self.unit_walkability.reset();
+
+        for u in units.all().filter(|u| !u.flying()) {
+            let dim = u.dimensions();
+            for wp in Rectangle::new(
+                dim.tl.to_walk_position(),
+                (dim.br + (7, 7)).to_walk_position(),
+            ) {
+                self.unit_walkability.set_pos(wp, u.id());
             }
         }
+        // threat maps
+        // for e in &units.enemy {
+        //     let (x, y) = e.tile_position().into();
+        //     let range = (e.get_ground_weapon().max_range + 31) / 32;
+        //     if e.get_type().ground_weapon() != WeaponType::None {
+        //         self.ground_threat.modify_in_range(
+        //             x as usize,
+        //             y as usize,
+        //             range as usize,
+        //             |i, _, _| i.unwrap_or(0) + 1,
+        //         );
+        //     }
+        //     if e.get_type().air_weapon() != WeaponType::None {
+        //         self.air_threat.modify_in_range(
+        //             x as usize,
+        //             y as usize,
+        //             range as usize,
+        //             |i, _, _| i.unwrap_or(0) + 1,
+        //         );
+        //     }
+        // }
     }
 }
 
