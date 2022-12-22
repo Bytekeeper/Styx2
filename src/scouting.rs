@@ -109,7 +109,7 @@ impl MyModule {
                         // Avoid using mining workers
                         + if u.gathering() { 300 } else { 0 }
                         // We sent someone else there before? Nudge the search to use the same unit
-                        + u.target_position().map(|p| p.distance(base_position) as u32 / 10).unwrap_or(0)
+                        + u.target_position().map(|p| p.distance(base_position) as i32 / 10).unwrap_or(0)
                 })
                 .cloned();
             if let Some(best_scout) = best_scout {

@@ -14,7 +14,8 @@ pub struct Squad {
 impl Squad {
     pub fn execute(&mut self, module: &mut MyModule) {
         // TODO Don't just bail without base, we could still be base trading
-        let base = match module.forward_base() {
+        let base = module.forward_base();
+        let base = match base {
             None => return,
             Some(x) => x,
         };
@@ -25,21 +26,29 @@ impl Squad {
             .filter(|it| !it.missing())
             .collect();
         // TODO: When is our base actually in danger?
-        let base_in_danger = module.skirmishes.skirmishes.iter().any(|c| {
-            c.cluster.units.contains(&base)
-                && c.cluster.units.iter().any(|it| {
-                    it.player().is_me()
-                        && it.get_type().is_building()
-                        && c.cluster.units.iter().any(|e| {
+        let offender = module
+            .skirmishes
+            .skirmishes
+            .iter()
+            .flat_map(|c| {
+                c.cluster
+                    .units
+                    .iter()
+                    .filter(|u| u.player().is_me() && u.get_type().is_building())
+                    .flat_map(|it| {
+                        c.cluster.units.iter().filter(|e| {
                             !e.get_type().is_worker()
                                 && e.player().is_enemy()
-                                && e.is_close_to_weapon_range(it, 128)
+                                && !e.missing()
+                                && module.frames_to_engage(e, it, 16) <= 24 * 1
                         })
-                })
-        });
+                    })
+            })
+            .next();
         let base = base.position();
-        if base_in_danger {
-            self.target = base;
+        if let Some(target) = offender {
+            assert!(!target.get_type().is_worker());
+            self.target = target.position();
         }
         // cvis().draw_text(
         //     uc.vanguard.position().x,
@@ -59,8 +68,10 @@ impl Squad {
         let mut fall_backers: Vec<&SUnit> = vec![];
         let mut attackers: Vec<&SUnit> = vec![];
         for s in module.skirmishes.skirmishes.iter() {
-            let combat_eval =
-                s.combat_evaluation.to_i32() + self.value_bias + s.potential_building_loss.my_dead;
+            let mut combat_eval = s.combat_evaluation.to_i32() + self.value_bias;
+            if offender.is_some() {
+                combat_eval += s.potential_building_loss.my_dead;
+            }
             let should_attack = has_minimum_required_army && combat_eval == 0 || combat_eval > 0;
             cvis().log(|| {
                 format!(
@@ -105,12 +116,17 @@ impl Squad {
                 return;
             }
         };
+
         for unit in fall_backers.iter() {
             let close_to_base = module.estimate_frames_to(unit, base) < 48;
             if unit.get_type() == UnitType::Zerg_Overlord
-                || !close_to_base && enemies.iter().any(|e| e.frames_to_engage(unit, 64) < 48)
+                || !close_to_base
+                    && enemies
+                        .iter()
+                        .any(|e| module.frames_to_engage(e, unit, 64) < 48)
             {
                 if !close_to_base {
+                    cvis().log_unit_frame(unit, || "Flee");
                     module.flee(unit, base);
                 }
             } else if unit.distance_to(*vanguard) > 256 || !unit.get_type().can_attack() {
@@ -178,12 +194,9 @@ impl Squad {
             Color::Blue,
         );
         cvis().draw_circle(self.target.x, self.target.y, 40, Color::Blue);
-        cvis().log(|| format!("Squad target: {:?}", self.target));
+        cvis().log(|| format!("Squad target: {:?} #{}", self.target, enemies.len()));
         let vanguard_position = uc.vanguard.position();
         let solution = module.select_targets(uc, enemies, self.target, false);
-        assert!(!attackers
-            .iter()
-            .any(|a| solution.iter().find(|(u, _)| &u == a).is_none()));
         for (u, t) in solution {
             // if u.position().distance_squared(vanguard_position) > 300 * 300 {
             //     u.move_to(vanguard_position);
@@ -197,7 +210,7 @@ impl Squad {
                 //     Color::Red,
                 // );
                 module.engage(&u, target);
-            } else if !u.attacking() {
+            } else if !u.sleeping() && !u.attacking() {
                 // CVIS.lock().unwrap().draw_line(
                 //     u.position().x,
                 //     u.position().y,

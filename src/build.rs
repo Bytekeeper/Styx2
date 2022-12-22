@@ -266,14 +266,14 @@ impl MyModule {
                     self.game
                         .can_build_here(&b.unit, *p, param.unit_type, false)
                         .unwrap_or(false)
-                        && (!self
+                        && !self
                             .units
-                            .all_in_radius(p.center(), 100)
+                            .all_in_radius(p.center(), 96)
                             .any(|it| it.get_type().is_resource_container())
-                            || !self
-                                .units
-                                .all_in_radius(p.center(), 112)
-                                .any(|it| it.get_type().is_resource_depot()))
+                        && !self
+                            .units
+                            .all_in_radius(p.center(), 108)
+                            .any(|it| it.get_type().is_resource_depot())
                 })
                 .min_by_key(|(_, p)| match param.at {
                     At::TilePosition(at) => p.distance_squared(at),
@@ -282,7 +282,10 @@ impl MyModule {
                         .map
                         .choke_points
                         .iter()
-                        .map(|cp| p.distance_squared(cp.top.to_tile_position()))
+                        .map(|cp| {
+                            // todo!("Make sure it's actually the outgoing choke");
+                            p.distance_squared(cp.top.to_tile_position())
+                        })
                         .min()
                         .unwrap(),
                 })
@@ -305,6 +308,14 @@ impl MyModule {
         //         frames_to_start_build, available_gms, future_gms, order_build
         //     ),
         // );
+        cvis().draw_text(
+            build_pos.x,
+            build_pos.y,
+            format!(
+                "Frames: {}, MG: {}, {}: {:?}",
+                frames_to_start_build, future_gms.minerals, future_gms.gas, param.unit_type
+            ),
+        );
         if !order_build && !(future_gms >= param.unit_type.price()) {
             CVIS.lock().unwrap().draw_rect(
                 build_pos.x - param.unit_type.dimension_left(),
@@ -312,14 +323,6 @@ impl MyModule {
                 build_pos.x + param.unit_type.dimension_right(),
                 build_pos.y + param.unit_type.dimension_down(),
                 Color::Red,
-            );
-            CVIS.lock().unwrap().draw_text(
-                build_pos.x,
-                build_pos.y,
-                format!(
-                    "Frames: {}, MG: {}, {}",
-                    frames_to_start_build, future_gms.minerals, future_gms.gas
-                ),
             );
             return Err(FailureReason::InsufficientResources);
         }
@@ -331,14 +334,6 @@ impl MyModule {
                 build_pos.x + param.unit_type.dimension_right(),
                 build_pos.y + param.unit_type.dimension_down(),
                 Color::Grey,
-            );
-            CVIS.lock().unwrap().draw_text(
-                build_pos.x,
-                build_pos.y,
-                format!(
-                    "Frames: {}, MG: {}, {}",
-                    frames_to_start_build, future_gms.minerals, future_gms.gas
-                ),
             );
             if builder
                 .target_position()

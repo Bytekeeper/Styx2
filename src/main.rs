@@ -15,33 +15,36 @@ mod scouting;
 mod skirmish;
 mod splayer;
 mod squad;
+mod strat;
 mod sunit;
 mod targeting;
 mod tracker;
 mod train;
 mod upgrade;
-mod util;
 
+use boids::{avoid, climb, WeightedPosition};
 use cherry_vis::*;
 use cluster::WithPosition;
 use config::*;
 use gathering::*;
 use gms::*;
 use grid::Grids;
+use ordered_float::OrderedFloat;
 use rsbwapi::sma::*;
 use rsbwapi::*;
+use rstar::AABB;
 use sbase::Bases;
 use scouting::*;
 use skirmish::*;
 use splayer::*;
 use squad::*;
 use std::borrow::Cow;
+use strat::*;
 use sunit::*;
 use targeting::*;
 use tracker::*;
 use train::*;
 use upgrade::*;
-use util::*;
 
 #[derive(Default)]
 pub struct AttackParams {
@@ -71,7 +74,8 @@ pub struct MyModule {
     pub tracker: Tracker,
     pub grids: Grids,
     pub map: Map,
-    pub strat: &'static dyn Fn(&mut MyModule) -> anyhow::Result<()>,
+    pub strat: std::rc::Rc<Strategy>,
+    pub strategy_records: Vec<StrategyRecord>,
 }
 
 impl MyModule {
@@ -92,12 +96,12 @@ impl MyModule {
             .my_completed
             .iter()
             .filter(|u| u.get_type().is_resource_depot())
-            .max_by_key(|b| {
+            .min_by_key(|b| {
                 self.game
                     .get_start_locations()
                     .iter()
                     .map(|l| self.map.get_path(b.position(), l.center()).1)
-                    .min()
+                    .sum::<u32>()
             })
             .cloned()
     }
@@ -182,7 +186,7 @@ impl MyModule {
         true
     }
     pub fn ensure_free_supply(&mut self, amount: i32) {
-        let supply_delta = self.get_pending_supply();
+        let supply_delta = self.get_pending_supply() / 2;
         if supply_delta < amount {
             self.start_train(TrainParam::train(UnitType::Zerg_Overlord));
         }
@@ -254,14 +258,13 @@ impl MyModule {
             .mine_all
             .iter()
             .map(|u| {
-                count_check(u.build_type())
-                    + if u.completed() {
-                        check(u.get_type()) as usize
-                    } else {
-                        // Lings have a few frames where they are not yet completed and only one of
-                        // the two lings will exist for a short period
-                        count_check(u.get_type())
-                    }
+                count_check(u.build_type()).max(if u.completed() {
+                    check(u.get_type()) as usize
+                } else {
+                    // Lings have a few frames where they are not yet completed and only one of
+                    // the two lings will exist for a short period
+                    count_check(u.get_type())
+                })
             })
             .sum::<usize>()
             + self
@@ -276,7 +279,7 @@ impl MyModule {
         result
     }
 
-    fn three_hatch_spire(&mut self) -> anyhow::Result<()> {
+    pub fn three_hatch_spire(&mut self) -> anyhow::Result<()> {
         self.ensure_unit_count(UnitType::Zerg_Drone, 9);
         self.ensure_unit_count(UnitType::Zerg_Overlord, 2);
         self.ensure_unit_count(UnitType::Zerg_Drone, 10);
@@ -290,15 +293,35 @@ impl MyModule {
         }
         self.ensure_base_count(3);
         self.ensure_unit_count(UnitType::Zerg_Zergling, 6);
+        self.ensure_building_count(
+            UnitType::Zerg_Creep_Colony,
+            1_usize.min(2_usize.saturating_sub(
+                self.count_pending_or_ready(|ut| ut == UnitType::Zerg_Sunken_Colony),
+            )),
+        );
+        self.ensure_building_count(UnitType::Zerg_Sunken_Colony, 2);
         self.ensure_unit_count(UnitType::Zerg_Drone, 13);
         self.ensure_building_count(UnitType::Zerg_Extractor, 1);
         self.ensure_unit_count(UnitType::Zerg_Overlord, 3);
         self.ensure_building_count(UnitType::Zerg_Lair, 1);
         self.ensure_building_count(UnitType::Zerg_Spire, 1);
         self.ensure_building_count(UnitType::Zerg_Hatchery, 4);
+        self.ensure_unit_count(UnitType::Zerg_Overlord, 5);
+        self.ensure_free_supply(4);
+        self.pump(UnitType::Zerg_Mutalisk);
 
         self.ensure_gathering_gas(GatherParams {
             ..Default::default()
+        });
+
+        self.perform_attacking(AttackParams::default());
+        self.perform_scouting(ScoutParams {
+            max_workers: if self.game.self_().unwrap().supply_used() > 10 * 2 {
+                1
+            } else {
+                0
+            },
+            ..ScoutParams::default()
         });
         Ok(())
     }
@@ -311,10 +334,7 @@ impl MyModule {
         self.ensure_free_supply(2);
         self.pump(UnitType::Zerg_Zergling);
 
-        self.perform_scouting(ScoutParams {
-            max_workers: 0,
-            ..ScoutParams::default()
-        });
+        self.perform_scouting(ScoutParams::default());
         self.perform_attacking(AttackParams {
             aggression_value: 400,
             ..Default::default()
@@ -399,13 +419,7 @@ impl MyModule {
     }
 
     pub fn perform_attacking(&mut self, attack_params: AttackParams) -> anyhow::Result<()> {
-        let base = self
-            .units
-            .my_completed
-            .iter()
-            .filter(|u| u.get_type().is_resource_depot())
-            .next(); // TODO What if we lost our depot?
-        let base = if let Some(base) = base {
+        let base = if let Some(base) = self.forward_base() {
             base
         } else {
             anyhow::bail!("No base");
@@ -441,7 +455,7 @@ impl MyModule {
         //     cvis().draw_line(next.x, next.y, x.x, x.y, Color::Purple);
         //     x = next;
         // }
-        let attackers: Vec<_> = self
+        let mut attackers: Vec<_> = self
             .units
             .my_completed
             .iter()
@@ -450,6 +464,35 @@ impl MyModule {
             })
             .cloned()
             .collect();
+
+        // Avoid storms
+        for pos in self
+            .game
+            .get_bullets()
+            .iter()
+            .filter(|b| b.get_type() == BulletType::Psionic_Storm)
+            .flat_map(|b| b.get_position())
+        {
+            for unit in self
+                .units
+                .all_in_envelope(AABB::from_corners(
+                    [pos.x - 32, pos.y - 32],
+                    [pos.x + 32, pos.y + 32],
+                ))
+                .filter(|u| u.player().is_me() && u.get_type().can_move())
+            {
+                let avoiding = avoid(unit, pos, 32.0 * 1.42, 1.0);
+                let forces = if unit.flying() {
+                    [avoiding, WeightedPosition::ZERO]
+                } else {
+                    [avoiding, climb(self, &unit, 32, 32, 1.0)]
+                };
+                let target = self.positioning(&unit, &forces);
+                unit.move_to(target);
+                self.tracker.reserve_unit(unit);
+            }
+        }
+
         if !attackers.is_empty() {
             Squad {
                 target,
@@ -549,27 +592,28 @@ impl MyModule {
         }
     }
 
-    fn three_hatch_zergling(&mut self) -> anyhow::Result<()> {
+    fn basic_twelve_hatch(&mut self) -> anyhow::Result<()> {
         self.ensure_unit_count(UnitType::Zerg_Drone, 9);
         self.ensure_unit_count(UnitType::Zerg_Overlord, 2);
-        self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
         if self.count_pending_or_ready(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) < 2 {
-            self.ensure_unit_count(UnitType::Zerg_Drone, 11);
+            self.ensure_unit_count(UnitType::Zerg_Drone, 12);
         }
         self.ensure_base_count(2);
-        self.ensure_unit_count(UnitType::Zerg_Zergling, 4);
-        self.ensure_unit_count(UnitType::Zerg_Drone, 11);
-        self.ensure_base_count(3);
-        if self.has_pending_or_ready(|ut| ut.is_refinery()) {
-            self.ensure_unit_count(UnitType::Zerg_Drone, 13);
-        }
-        self.ensure_building_count(UnitType::Zerg_Extractor, 1);
+        self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
+        Ok(())
+    }
+
+    fn three_hatch_zergling(&mut self) -> anyhow::Result<()> {
+        self.basic_twelve_hatch();
+        self.ensure_unit_count(UnitType::Zerg_Drone, 13);
         self.ensure_unit_count(UnitType::Zerg_Zergling, 6);
+        self.ensure_building_count(UnitType::Zerg_Hatchery, 3);
+        self.ensure_building_count(UnitType::Zerg_Extractor, 1);
         self.ensure_unit_count(UnitType::Zerg_Overlord, 3);
         self.ensure_unit_count(UnitType::Zerg_Zergling, 12);
         self.ensure_upgrade(UpgradeType::Metabolic_Boost, 1);
         self.ensure_free_supply(2);
-        self.ensure_unit_count(UnitType::Zerg_Zergling, 300);
+        self.pump(UnitType::Zerg_Zergling);
 
         self.ensure_gathering_gas(GatherParams {
             required_resources: -self.tracker.available_gms.gas,
@@ -608,7 +652,25 @@ impl MyModule {
         Ok(())
     }
 
-    pub fn estimate_frames_to(&self, unit: &SUnit, target: Position) -> u32 {
+    pub fn frames_to_engage(&self, unit: &SUnit, other: &SUnit, buffer: i32) -> i32 {
+        let wpn = unit.weapon_against(other);
+        if wpn.weapon_type == WeaponType::None {
+            return std::i32::MAX;
+        }
+        if !unit.get_type().can_move() {
+            return if unit.is_close_to_weapon_range(other, buffer) {
+                0
+            } else {
+                std::i32::MAX
+            };
+        }
+        let distance_to_move = self
+            .estimate_frames_to(unit, other.position())
+            .saturating_sub(buffer + wpn.max_range);
+        0.max((distance_to_move as f64 / unit.top_speed()) as i32)
+    }
+
+    pub fn estimate_frames_to(&self, unit: &SUnit, target: Position) -> i32 {
         assert!(
             unit.get_type().top_speed() > 0.0,
             "No! A {:?} really is very very slow!",
@@ -619,7 +681,7 @@ impl MyModule {
         } else {
             self.map.get_path(unit.position(), target).1 as f64
         }) / unit.get_type().top_speed())
-        .ceil() as u32
+        .ceil() as i32
     }
 }
 
@@ -636,21 +698,43 @@ impl SupplyCounter for &[Unit] {
 
 impl AiModule for MyModule {
     fn on_start(&mut self, game: &Game) {
+        std::fs::create_dir_all("bwapi-data/write/cvis");
+        self.strategy_records = load_strategies().unwrap_or_else(|e| {
+            eprintln!("Failed to load strategies: {}!", e);
+            vec![]
+        });
         *CVIS.lock().unwrap() = cherry_vis::implementation::CherryVis::new(game);
         self.map = Map::new(game);
         self.bases = Bases::new(self);
 
-        let strategies: &[&dyn Fn(&mut MyModule) -> anyhow::Result<()>] =
-            match self.game.enemy().map(|e| e.get_race()) {
-                Some(Race::Protoss) => &[&Self::two_hatch_hydra],
-                _ => &[&Self::four_pool_aggressive, &Self::two_hatch_hydra],
-            };
+        let strategies: [Strategy; 4] = [
+            Strategy::from_fn(&Self::three_hatch_zergling),
+            Strategy::from_fn(&Self::two_hatch_hydra),
+            Strategy::from_fn(&Self::four_pool_aggressive),
+            Strategy::from_fn(&Self::opening_styx),
+        ];
         let time = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let mut rnd = oorandom::Rand32::new(time);
-        self.strat = strategies[rnd.rand_range(0..strategies.len() as u32) as usize];
+        self.strat = strategies
+            .into_iter()
+            .max_by_key(|s| {
+                OrderedFloat(
+                    s.win_probability(
+                        &self.strategy_records,
+                        game.enemy()
+                            .expect("Only 1v1 is supported")
+                            .get_name()
+                            .as_str(),
+                        game.map_name().as_str(),
+                    ),
+                )
+            })
+            .expect("More than 0 strategies should be available")
+            .into();
+        eprintln!("Selected strategy: {}", self.strat.name);
         // for x in 0..50 {
         //     for y in 0..50 {
         //         cvis().draw_text(
@@ -665,10 +749,17 @@ impl AiModule for MyModule {
         // }
     }
 
-    fn on_end(&mut self, game: &Game, _winner: bool) {
+    fn on_end(&mut self, game: &Game, winner: bool) {
+        update_strategy_records(
+            &mut self.strategy_records,
+            &self.strat,
+            winner,
+            &self.game.enemy().unwrap().get_name(),
+            &self.game.map_name(),
+        );
+        save_strategies(&self.strategy_records);
         #[cfg(feature = "cvis")]
         {
-            std::fs::create_dir_all("bwapi-data/write/cvis");
             let encoder = serde_json::to_writer(
                 zstd::stream::write::Encoder::new(
                     std::fs::File::create("bwapi-data/write/cvis/trace.json").unwrap(),
@@ -817,7 +908,7 @@ impl AiModule for MyModule {
                 }
             }
 
-            (self.strat)(self);
+            self.strat.clone().tick(self);
 
             // Always gather minerals with the remaining drones, can't imagine a situation where
             // this is a bad idea...
@@ -852,8 +943,9 @@ fn main() {
         tracker: Tracker::default(),
         map: Map::new(game),
         skirmishes: Default::default(),
-        strat: &MyModule::two_hatch_hydra,
+        strat: std::rc::Rc::new(Strategy::from_fn(&MyModule::two_hatch_hydra)),
         grids: Grids::new(),
+        strategy_records: vec![],
     });
     // if let Ok(report) = guard.report().build() {
     //     let file = std::fs::File::create("flamegraph.svg").unwrap();

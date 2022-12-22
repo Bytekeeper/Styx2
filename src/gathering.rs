@@ -16,37 +16,37 @@ impl Default for GatherParams {
 }
 
 impl MyModule {
-    pub fn estimate_gas(&self, frames: u32, sub_workers: u32) -> u32 {
+    pub fn estimate_gas(&self, frames: i32, sub_workers: i32) -> i32 {
         (self
             .units
             .my_completed
             .iter()
             .filter(|it| it.gathering_gas())
-            .count() as u32)
+            .count() as i32)
             .saturating_sub(sub_workers)
             * 69
             * frames
             / 1000
     }
 
-    pub fn estimate_minerals(&self, frames: u32, sub_workers: u32) -> u32 {
+    pub fn estimate_minerals(&self, frames: i32, sub_workers: i32) -> i32 {
         (self
             .units
             .my_completed
             .iter()
             .filter(|it| it.gathering_minerals())
-            .count() as u32)
+            .count() as i32)
             .saturating_sub(sub_workers)
             * 47
             * frames
             / 1000
     }
 
-    pub fn estimate_gms(&self, frames: u32, sub_workers: u32) -> Gms {
+    pub fn estimate_gms(&self, frames: i32, sub_workers: i32) -> Gms {
         Gms {
-            minerals: self.estimate_minerals(frames, sub_workers) as i32,
+            minerals: self.estimate_minerals(frames, sub_workers),
             // TODO: Only subtract workers from miners?
-            gas: self.estimate_gas(frames, 0) as i32,
+            gas: self.estimate_gas(frames, 0),
             supply: 0,
         }
     }
@@ -80,7 +80,8 @@ impl MyModule {
             });
             let gas_workers: Vec<_> = gas_workers
                 .iter()
-                .take(remaining_required.clamp(0, 4.min(remaining_workers)))
+                // TODO decide 3 or 4 workers based on base <-> refinery distance
+                .take(remaining_required.clamp(0, 3.min(remaining_workers)))
                 .cloned()
                 .collect();
             // TODO: subtract only 2 for depleted
@@ -128,7 +129,7 @@ impl MyModule {
             self.tracker.reserve_unit(w);
         }
         miners.retain(|w| {
-            if w.get_order() == Order::MiningMinerals {
+            if matches!(w.get_order(), Order::MiningMinerals) {
                 minerals.swap_remove(
                     minerals
                         .iter()
@@ -155,7 +156,12 @@ impl MyModule {
                                 j,
                                 m,
                                 m.position().distance_squared(u.position())
-                                    + if m.being_gathered() { 90 } else { 0 },
+                                    + if m.being_gathered() { 90 } else { 0 }
+                                    + if u.get_order_target().as_ref() == Some(m) {
+                                        0
+                                    } else {
+                                        90
+                                    },
                             )
                         })
                         .min_by_key(|(_, m, d)| *d)

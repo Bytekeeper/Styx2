@@ -9,6 +9,7 @@ use std::rc::Rc;
 #[derive(Default)]
 pub struct Skirmishes {
     pub skirmishes: Vec<Skirmish>,
+    pub situation: i32,
 }
 
 pub struct Skirmish {
@@ -47,6 +48,7 @@ impl SimResult {
 
 impl Skirmishes {
     pub fn new(module: &MyModule, clusters: &[Rc<Cluster>]) -> Skirmishes {
+        let mut situation = 0;
         let mut skirmishes = Vec::with_capacity(clusters.len());
         for cluster in clusters {
             // Basic idea: We simulate attacking and fleeing. What we would lose on fleeing is
@@ -55,6 +57,20 @@ impl Skirmishes {
                 Position::new(x, y).is_valid(&&module.game)
                     && module.game.is_walkable((x / 8, y / 8))
             };
+            situation += cluster
+                .units
+                .iter()
+                .filter(|u| is_attacker(u))
+                .map(|u| {
+                    if u.player().is_me() {
+                        module.value_of(u.get_type(), true)
+                    } else if u.player().is_enemy() {
+                        -module.value_of(u.get_type(), false)
+                    } else {
+                        0
+                    }
+                })
+                .sum::<i32>();
             let mut sim_attack = Simulator {
                 player_a: Player {
                     agents: cluster
@@ -228,6 +244,10 @@ impl Skirmishes {
             });
         }
 
-        Self { skirmishes }
+        cvis().log(|| format!("Situation eval: {}", situation));
+        Self {
+            skirmishes,
+            situation,
+        }
     }
 }

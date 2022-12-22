@@ -1,4 +1,4 @@
-use crate::MyModule;
+use crate::{MyModule, SPlayer, SUnit};
 use ahash::AHashMap;
 use rsbwapi::Game;
 use rsbwapi::TilePosition;
@@ -8,6 +8,8 @@ pub struct SBase {
     pub last_explored: i32,
     pub starting_location: bool,
     pub elevation_level: i32,
+    pub player: Option<SPlayer>,
+    pub resource_depot: Option<SUnit>,
 }
 
 #[derive(Default)]
@@ -22,6 +24,15 @@ impl Bases {
             .bases
             .iter()
             .map(|b| {
+                let resource_depot = module
+                    .units
+                    .all()
+                    .filter(|it| {
+                        it.get_type().is_resource_depot()
+                            && it.tile_position().distance_squared(b.position) < 100
+                    })
+                    .next()
+                    .cloned();
                 (
                     b.position,
                     SBase {
@@ -33,6 +44,8 @@ impl Bases {
                             .iter()
                             .any(|l| l.distance_squared(b.position) < 5 * 5),
                         elevation_level: module.game.get_ground_height(b.position),
+                        player: resource_depot.as_ref().map(|it| it.player()),
+                        resource_depot,
                     },
                 )
             })

@@ -156,6 +156,10 @@ impl Units {
             .filter(move |it| it.envelope().distance_2(&[pos.x, pos.y]) < radius * radius)
     }
 
+    pub fn all_in_envelope(&self, envelope: AABB<[i32; 2]>) -> impl Iterator<Item = &SUnit> + '_ {
+        self.all_rstar.locate_in_envelope_intersecting(&envelope)
+    }
+
     pub fn all_in_range(
         &self,
         position: &impl RTreeObject<Envelope = AABB<[i32; 2]>>,
@@ -486,22 +490,6 @@ impl SUnit {
             let distance = self.distance_to(other);
             (wpn.min_range == 0 || wpn.min_range < distance) && distance <= wpn.max_range + buffer
         }
-    }
-
-    pub fn frames_to_engage(&self, other: &SUnit, buffer: i32) -> i32 {
-        let wpn = self.weapon_against(other);
-        if wpn.weapon_type == WeaponType::None {
-            return std::i32::MAX;
-        }
-        if !self.get_type().can_move() {
-            return if self.is_close_to_weapon_range(other, buffer) {
-                0
-            } else {
-                std::i32::MAX
-            };
-        }
-        let distance_to_move = self.distance_to(other) - buffer - wpn.max_range;
-        0.max((distance_to_move as f64 / self.top_speed()) as i32)
     }
 
     pub fn is_in_weapon_range(&self, other: &SUnit) -> bool {

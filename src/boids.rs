@@ -91,6 +91,31 @@ impl MyModule {
     }
 }
 
+pub fn avoid(unit: &SUnit, pos: Position, minimum_distance: f32, weight: f32) -> WeightedPosition {
+    let unit = pos_to_vec2(unit.position());
+    let delta = unit - pos_to_vec2(pos);
+    let dist = delta.length();
+    if dist > minimum_distance {
+        return WeightedPosition::ZERO;
+    }
+    // "Push" more if we're closer
+    let scale = 1.0 - dist / minimum_distance;
+    let position = delta * (minimum_distance - dist) / dist;
+    if DRAW_FORCE_VECTORS {
+        cvis().draw_line(
+            unit.x as i32,
+            unit.y as i32,
+            (unit.x + position.x) as i32,
+            (unit.y + position.y) as i32,
+            rsbwapi::Color::Red,
+        );
+    }
+    WeightedPosition {
+        position,
+        weight: weight * scale,
+    }
+}
+
 pub fn separation(
     unit: &SUnit,
     other: &SUnit,

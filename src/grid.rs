@@ -1,4 +1,4 @@
-use crate::{boxed_array, Units};
+use crate::Units;
 use rsbwapi::*;
 
 #[derive(Copy, Clone)]
@@ -14,16 +14,15 @@ pub struct Grid<T, const N: usize> {
 
 impl<T: Copy, const N: usize> Grid<T, N> {
     pub fn new(default: T) -> Self {
-        Self {
-            version: 1,
-            tiles: boxed_array(vec![
+        let Ok(tiles) = vec![
                 [Tile {
                     version: 0,
                     item: default
                 }; N];
                 N
-            ]),
-        }
+            ]
+            .try_into() else { unreachable!() };
+        Self { version: 1, tiles }
     }
 
     pub fn reset(&mut self) {

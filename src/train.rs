@@ -18,14 +18,15 @@ impl MyModule {
         unit_type: UnitType,
         amount: usize,
     ) -> Result<(), FailureReason> {
+        let mut result = Ok(());
         let units_per_egg = 1 + unit_type.is_two_units_in_one_egg() as usize;
         for _ in 0..(units_per_egg / 2
             + amount.saturating_sub(self.count_pending_or_ready(|ut| ut == unit_type)))
             / units_per_egg
         {
-            self.start_train(TrainParam::train(unit_type))?;
+            result = self.start_train(TrainParam::train(unit_type));
         }
-        Ok(())
+        result
     }
 
     pub fn pump(&mut self, unit_type: UnitType) -> Result<(), FailureReason> {

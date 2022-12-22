@@ -4,6 +4,7 @@ use rsbwapi::*;
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::fmt::{Display, Error, Formatter};
 
 pub struct UnitCluster<'a> {
     pub vanguard: &'a SUnit,
@@ -17,6 +18,12 @@ struct Target<'a> {
     health_including_shields: Cell<i32>,
     attacker_count: Cell<i32>,
     cliffed_tank: bool,
+}
+
+impl<'a> std::fmt::Debug for Target<'a> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        write!(f, "T: {}: {:?}", self.unit.id(), self.unit.get_type())
+    }
 }
 
 impl<'a> Target<'a> {
@@ -238,6 +245,16 @@ impl MyModule {
                     if unit.cooldown() <= self.game.get_latency_frames() + 2 {
                         target.deal_damage(self, unit);
                     }
+                } else if unit.get_order_target().map(|x| x.exists()).unwrap_or(false) {
+                    cvis().log(|| {
+                        format!(
+                            "T-E {}: {}/{:?} {:?}",
+                            unit.id(),
+                            unit.get_order_target().unwrap().id(),
+                            unit.get_order_target().unwrap().get_type(),
+                            targets,
+                        )
+                    });
                 }
 
                 result.push(((*unit).clone(), target.map(|t| t.unit.clone())));

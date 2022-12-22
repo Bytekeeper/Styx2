@@ -58,6 +58,7 @@ impl MyModule {
         // If the enemy is targeting me, kiting should give allies more time to help
             && (longer_range_and_not_slower || enemy_has_targeted_us);
         if kite {
+            cvis().log_unit_frame(unit, || format!("Kiting CD: {}", unit.cooldown()));
             let pos = unit.position();
             let mut boid_forces: Vec<_> = self
                 .units
