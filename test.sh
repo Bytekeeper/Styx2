@@ -1,8 +1,8 @@
 #!/bin/bash -e 
 ./build.sh
-MAP='aiide/(2)Benzene.scx'
+# MAP='aiide/(2)Benzene.scx'
 # MAP='aiide/(2)Destination.scx'
-# MAP='aiide/(2)HeartbreakRidge.scx'
+MAP='aiide/(2)HeartbreakRidge.scx'
 # MAP='aiide/(2)PolarisRhapsody.scx'
 # MAP='aiide/(3)Aztec.scx'
 # MAP='aiide/(3)Longinus2.scx'
@@ -17,7 +17,7 @@ MAP='aiide/(2)Benzene.scx'
 
 # BOT='Pylon Puller'
 # BOT='Steamhammer'
-BOT='Microwave'
+# BOT='Microwave'
 # BOT='Bryan Weber'
 # BOT='Stardust'
 # BOT='BananaBrain'
@@ -28,7 +28,9 @@ BOT='Microwave'
 # BOT='NiteKatT'
 # BOT='Ecgberht'
 # BOT='MadMixP'
-# BOT='Flash'
+BOT='Flash'
+# BOT='CUBOT'
+# BOT='Sijia Xu'
 GAME_NAME="$(expr "$BOT" : '\([A-Za-z0-9]\{4\}\)')_$(expr "$MAP" : '.*)\([A-Za-z0-9]\{4\}\)')"
 REPLAY_NAME="$GAME_NAME.rep"
 

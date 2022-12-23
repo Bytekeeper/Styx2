@@ -72,6 +72,7 @@ impl Strategy {
     }
 
     pub fn win_probability(&self, records: &[StrategyRecord], enemy: &str, map: &str) -> f32 {
+        let rnd = (((enemy as *const str as *const u8 as usize) / 3 + 1337) * 7 % 5) as i32;
         let Some(record) = records
             .iter()
             .filter(|r| &r.strategy == self.name && &r.enemy == enemy && &r.map == map)
@@ -84,7 +85,7 @@ impl Strategy {
             })
             .or_else(|| records.iter().filter(|r| &r.strategy == self.name).next())
             else { return 0.5 };
-        return record.wins as f32 / (record.losses + record.wins) as f32;
+        return (record.wins + rnd) as f32 / (record.losses + record.wins + rnd) as f32;
     }
 }
 

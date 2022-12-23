@@ -21,7 +21,7 @@ pub trait CherryVisOutput {
     fn draw_rect(&mut self, ax: i32, ay: i32, bx: i32, by: i32, color: Color) {}
     fn draw_circle(&mut self, x: i32, y: i32, radius: i32, color: Color) {}
     fn log_unit_frame<A: AsRef<str>>(&mut self, unit: &SUnit, message: impl FnOnce() -> A) {}
-    fn log(&mut self, message: impl FnOnce() -> String) {}
+    fn log<A: AsRef<str>>(&mut self, message: impl FnOnce() -> A) {}
 }
 
 pub fn cvis() -> std::sync::MutexGuard<'static, implementation::CherryVis> {
@@ -221,7 +221,7 @@ pub mod implementation {
         }
 
         #[track_caller]
-        fn log(&mut self, message: impl FnOnce() -> String) {
+        fn log<A: AsRef<str>>(&mut self, message: impl FnOnce() -> A) {
             let loc = Location::caller();
             let f_name = loc.file().rsplitn(2, "/").next().unwrap();
             if LOG_FILTER.contains(&f_name) {
@@ -229,7 +229,7 @@ pub mod implementation {
             }
             self.logs.push(LogEntry {
                 frame: self.frame,
-                message: format!("{}:{} : {}", loc.line(), loc.file(), message()),
+                message: format!("{}:{} : {}", loc.line(), loc.file(), message().as_ref()),
                 line: loc.line() as i32,
                 file: loc.file().to_owned(),
             });

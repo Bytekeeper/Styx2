@@ -130,12 +130,14 @@ impl MyModule {
         }
         miners.retain(|w| {
             if matches!(w.get_order(), Order::MiningMinerals) {
-                minerals.swap_remove(
-                    minerals
+                let Some(mineral_index) = minerals
                         .iter()
                         .position(|m| Some(*m) == w.get_order_target().as_ref())
-                        .expect("Worker target mineral not found"),
-                );
+                    else {
+                        cvis().log(|| "Worker target mineral not found");
+                        return true;
+                    };
+                minerals.swap_remove(mineral_index);
                 return false;
             } else if w.get_order() == Order::ReturnMinerals {
                 return false;

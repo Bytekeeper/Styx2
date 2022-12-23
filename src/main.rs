@@ -429,20 +429,19 @@ impl MyModule {
             .enemy
             .iter()
             .filter(|u| u.get_type().is_building())
-            .min_by_key(|u| self.map.get_path(base.position(), u.position()).1)
-            .map(|u| {
-                let pos = u.position();
+            .min_by_key(|u| {
                 self.bases.all()
                     .filter(|b| b.elevation_level == u.elevation_level())
-                    .map(|b| b.position.center())
-                    .min_by_key(|b| self.map.get_path(*b, pos).1)
-                    .unwrap_or(pos)
+                    .map(|b| OrderedFloat(b.position.center().distance(u.position())))
+                    .min_by_key(|b| *b)
+                    .unwrap_or(OrderedFloat(0.0))
             })
+            .map(|u| u.position())
             .or_else(|| {
                 self.units
                     .enemy
                     .iter()
-                    .filter(|it| it.get_type().can_move() && it.get_type().can_attack())
+                    .filter(|it| it.get_type().can_move() && it.get_type().can_attack() && !it.missing())
                     .min_by_key(|u| {
                             self.estimate_frames_to(u, self.forward_base().unwrap().position())
                     })
@@ -612,7 +611,7 @@ impl MyModule {
         self.ensure_unit_count(UnitType::Zerg_Overlord, 3);
         self.ensure_unit_count(UnitType::Zerg_Zergling, 12);
         self.ensure_upgrade(UpgradeType::Metabolic_Boost, 1);
-        self.ensure_free_supply(2);
+        self.ensure_free_supply(4);
         self.pump(UnitType::Zerg_Zergling);
 
         self.ensure_gathering_gas(GatherParams {
@@ -718,19 +717,23 @@ impl AiModule for MyModule {
             .unwrap()
             .as_secs();
         let mut rnd = oorandom::Rand32::new(time);
+        eprintln!("{:?}", game.enemies());
         self.strat = strategies
             .into_iter()
             .max_by_key(|s| {
-                OrderedFloat(
-                    s.win_probability(
-                        &self.strategy_records,
-                        game.enemy()
-                            .expect("Only 1v1 is supported")
-                            .get_name()
-                            .as_str(),
-                        game.map_name().as_str(),
-                    ),
-                )
+                let wp = s.win_probability(
+                    &self.strategy_records,
+                    game.enemy()
+                        .map(|e| e.get_name())
+                        .unwrap_or_else(|| {
+                            eprintln!("No enemy found");
+                            "".to_string()
+                        })
+                        .as_ref(),
+                    game.map_name().as_str(),
+                );
+                eprintln!("WP of {}: {}", s.name, wp);
+                OrderedFloat(wp)
             })
             .expect("More than 0 strategies should be available")
             .into();
@@ -750,14 +753,17 @@ impl AiModule for MyModule {
     }
 
     fn on_end(&mut self, game: &Game, winner: bool) {
-        update_strategy_records(
-            &mut self.strategy_records,
-            &self.strat,
-            winner,
-            &self.game.enemy().unwrap().get_name(),
-            &self.game.map_name(),
-        );
-        save_strategies(&self.strategy_records);
+        // Replays or crashed opponents crash this here
+        if let Some(enemy) = self.game.enemy() {
+            update_strategy_records(
+                &mut self.strategy_records,
+                &self.strat,
+                winner,
+                enemy.get_name().as_ref(),
+                &self.game.map_name(),
+            );
+            save_strategies(&self.strategy_records);
+        }
         #[cfg(feature = "cvis")]
         {
             let encoder = serde_json::to_writer(

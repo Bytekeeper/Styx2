@@ -66,10 +66,6 @@ impl Units {
             let inner = u.inner.borrow();
             !inner.missing || inner.type_.is_flying_building() || !inner.type_.is_building()
         });
-        debug_assert!(!self
-            .all
-            .values()
-            .any(|it| it.missing() && it.get_type().is_building()));
         for u in game.get_all_units() {
             let new_unit_info = UnitInfo::new(game, &u);
             let unit = self
@@ -97,6 +93,9 @@ impl Units {
             } else {
                 inner.stuck_frames = 0;
             }
+        }
+        for u in self.all.values().filter(|u| u.missing()) {
+            crate::cvis().log_unit_frame(u, || "Missing");
         }
         for u in self.all.values() {
             u.resolve(&self.all, &players.all);
