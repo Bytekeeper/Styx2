@@ -253,7 +253,7 @@ impl SUnit {
 
     pub fn unstick(&self) {
         let mut inner = self.inner.borrow_mut();
-        if inner.stuck_frames < 8 {
+        if !inner.type_.can_move() || inner.stuck_frames < 8 {
             return;
         }
         dbg!("Unsticking", self.unit.get_id(), self.unit.get_type());

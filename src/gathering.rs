@@ -137,7 +137,14 @@ impl MyModule {
                         cvis().log(|| "Worker target mineral not found");
                         return true;
                     };
-                minerals.swap_remove(mineral_index);
+                let mineral = minerals.swap_remove(mineral_index);
+                cvis().draw_line(
+                    w.position().x,
+                    w.position().y,
+                    mineral.position().x,
+                    mineral.position().y,
+                    Color::Green,
+                );
                 return false;
             } else if w.get_order() == Order::ReturnMinerals {
                 return false;
@@ -157,12 +164,12 @@ impl MyModule {
                             (
                                 j,
                                 m,
-                                m.position().distance_squared(u.position())
+                                self.estimate_frames_to(u, m.position())
                                     + if m.being_gathered() { 90 } else { 0 }
                                     + if u.get_order_target().as_ref() == Some(m) {
                                         0
                                     } else {
-                                        90
+                                        45
                                     },
                             )
                         })
@@ -171,10 +178,19 @@ impl MyModule {
                 })
                 .min_by_key(|(.., d)| *d);
             if let Some((i, w, j, m, _)) = miner_mineral {
+                cvis().draw_line(
+                    w.position().x,
+                    w.position().y,
+                    m.position().x,
+                    m.position().y,
+                    Color::Green,
+                );
                 w.gather(m).ok();
                 miners.swap_remove(i);
                 // We might want multiple workers on one mineral
-                // minerals.swap_remove(j);
+                if miners.len() <= minerals.len() {
+                    minerals.swap_remove(j);
+                }
             } else {
                 // TODO No minerals? Make workers attack as well I guess?
                 break;

@@ -80,32 +80,7 @@ impl MyModule {
         }
         let wpn = unit.weapon_against(enemy);
         let distance = unit.distance_to(enemy).saturating_sub(wpn.max_range);
-        if distance < 32 || distance > 128 {
-            unit.attack(enemy);
-        } else {
-            let pos = unit.position();
-            let mut boid_forces = vec![cohesion(
-                &unit,
-                enemy,
-                (distance as f64 / unit.top_speed()) as i32,
-                0.0,
-                2.0,
-            )];
-            if !unit.flying() {
-                boid_forces.push(climb(self, &unit, 32, 32, 1.0));
-            } else {
-                boid_forces.extend(
-                    self.units
-                        .all_rstar
-                        .locate_in_envelope_intersecting(&AABB::from_corners(
-                            [pos.x - 300, pos.y - 300],
-                            [pos.x + 300, pos.y + 300],
-                        ))
-                        .map(|e| separation(&unit, e, 32.0, 0.3)),
-                );
-            }
-            let target = self.positioning(&unit, &boid_forces);
-            unit.move_to(target);
-        }
+        // TODO lead/path enemy
+        unit.attack(enemy);
     }
 }
