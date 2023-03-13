@@ -16,6 +16,7 @@ mod skirmish;
 mod splayer;
 mod squad;
 mod strat;
+mod strats;
 mod sunit;
 mod targeting;
 mod tracker;
@@ -29,6 +30,8 @@ use config::*;
 use gathering::*;
 use gms::*;
 use grid::Grids;
+use log::{error, info, warn};
+use metered::{metered, ResponseTime, Throughput};
 use ordered_float::OrderedFloat;
 use rsbwapi::sma::*;
 use rsbwapi::*;
@@ -39,12 +42,26 @@ use skirmish::*;
 use splayer::*;
 use squad::*;
 use std::borrow::Cow;
+use std::sync::Mutex;
 use strat::*;
 use sunit::*;
 use targeting::*;
 use tracker::*;
 use train::*;
 use upgrade::*;
+
+lazy_static::lazy_static! {
+
+    pub static ref global_metric: Metrics = Metrics::default();
+}
+
+#[derive(Default, serde::Serialize)]
+pub struct Metrics {
+    main_metrics: MainMetrics,
+    units_metrics: UnitsMetrics,
+    skirmishes_metrics: SkirmishesMetrics,
+    dbscan: ResponseTime,
+}
 
 #[derive(Default)]
 pub struct AttackParams {
@@ -141,6 +158,32 @@ impl MyModule {
         true
     }
 
+    pub fn altitude_path_next(
+        &self,
+        from: WalkPosition,
+        to: WalkPosition,
+        min_altitude: i16,
+    ) -> Option<WalkPosition> {
+        WALK_POSITION_8_DIR
+            .map(|d| from + d)
+            .into_iter()
+            .filter(|p| {
+                p.is_valid(&&self.game)
+                    && matches!(self.map.get_altitude(*p), Altitude::Walkable(x) if x  >= min_altitude)
+            })
+            .min_by_key(|p| OrderedFloat(p.distance(to)))
+    }
+
+    pub fn is_ground_walkable(&self, unit: &SUnit, pos: WalkPosition) -> bool {
+        pos.is_valid(&&self.game)
+            && self.game.is_walkable(pos)
+            && self
+                .grids
+                .get_occupant(pos)
+                .map(|id| id == unit.id())
+                .unwrap_or(true)
+    }
+
     pub fn furthest_walkable_position(&self, unit: &SUnit, to: Position) -> Option<WalkPosition> {
         let to = to.to_walk_position();
         let mut from = unit.position().to_walk_position();
@@ -151,14 +194,7 @@ impl MyModule {
         let sy = (from.y < to.y) as i32 * 2 - 1;
         let mut err = dx + dy;
         loop {
-            if !from.is_valid(&&self.game)
-                || !self.game.is_walkable(from)
-                || self
-                    .grids
-                    .get_occupant(from)
-                    .map(|id| id != unit.id())
-                    .unwrap_or(false)
-            {
+            if !self.is_ground_walkable(unit, from) {
                 return last;
             }
             last = Some(from);
@@ -486,7 +522,9 @@ impl MyModule {
                 } else {
                     [avoiding, climb(self, &unit, 32, 32, 1.0)]
                 };
-                let target = self.positioning(&unit, &forces);
+                let target = self
+                    .positioning(&unit, &forces)
+                    .unwrap_or_else(|| unit.position());
                 unit.move_to(target);
                 self.tracker.reserve_unit(unit);
             }
@@ -519,7 +557,10 @@ impl MyModule {
         if self.count_pending_or_ready(|ut| ut.is_successor_of(UnitType::Zerg_Hatchery)) < 2 {
             self.ensure_unit_count(UnitType::Zerg_Drone, 12);
         }
-        self.ensure_base_count(2);
+        let x = self.ensure_base_count(2);
+        if let Err(x) = x {
+            cvis().log(|| format!("Failed to create base: {:?}", x));
+        }
         self.ensure_building_count(UnitType::Zerg_Extractor, 1);
         self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
         self.ensure_unit_count(UnitType::Zerg_Drone, 15);
@@ -589,6 +630,24 @@ impl MyModule {
             );
             self.ensure_building_count(UnitType::Zerg_Spore_Colony, 1);
         }
+    }
+
+    fn twelve_pool(&mut self) -> anyhow::Result<()> {
+        self.ensure_unit_count(UnitType::Zerg_Drone, 9);
+        self.ensure_unit_count(UnitType::Zerg_Overlord, 2);
+        if self.count_pending_or_ready(|ut| ut == UnitType::Zerg_Drone) >= 12 {
+            self.ensure_building_count(UnitType::Zerg_Spawning_Pool, 1);
+        }
+        if self.count_pending_or_ready(|ut| ut == UnitType::Zerg_Drone) >= 11 {
+            self.ensure_building_count(UnitType::Zerg_Extractor, 1);
+        }
+        if self.count_pending_or_ready(|ut| ut.is_refinery()) == 0 {
+            self.ensure_unit_count(UnitType::Zerg_Drone, 12);
+        }
+
+        self.ensure_unit_count(UnitType::Zerg_Drone, 10);
+        self.ensure_unit_count(UnitType::Zerg_Zergling, 6);
+        Ok(())
     }
 
     fn basic_twelve_hatch(&mut self) -> anyhow::Result<()> {
@@ -695,29 +754,32 @@ impl SupplyCounter for &[Unit] {
     }
 }
 
+#[metered::metered(registry = MainMetrics, visibility = pub, registry_expr = global_metric.main_metrics)]
 impl AiModule for MyModule {
     fn on_start(&mut self, game: &Game) {
         std::fs::create_dir_all("bwapi-data/write/cvis");
         self.strategy_records = load_strategies().unwrap_or_else(|e| {
-            eprintln!("Failed to load strategies: {}!", e);
+            error!("Failed to load strategies: {}!", e);
             vec![]
         });
         *CVIS.lock().unwrap() = cherry_vis::implementation::CherryVis::new(game);
         self.map = Map::new(game);
         self.bases = Bases::new(self);
 
-        let strategies: [Strategy; 4] = [
-            Strategy::from_fn(&Self::three_hatch_zergling),
-            Strategy::from_fn(&Self::two_hatch_hydra),
-            Strategy::from_fn(&Self::four_pool_aggressive),
-            Strategy::from_fn(&Self::opening_styx),
+        let strategies = [
+            // Strategy::from_fn(&Self::three_hatch_zergling),
+            // Strategy::from_fn(&Self::two_hatch_hydra),
+            Strategy::from_fn(&Self::three_hatch_spire),
+            // Strategy::from_fn(&Self::fastest_possible),
+            // Strategy::from_fn(&Self::four_pool_aggressive),
+            // Strategy::from_fn(&Self::opening_styx),
         ];
         let time = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let mut rnd = oorandom::Rand32::new(time);
-        eprintln!("{:?}", game.enemies());
+        info!("My enemies: {:?}", game.enemies());
         self.strat = strategies
             .into_iter()
             .max_by_key(|s| {
@@ -726,18 +788,18 @@ impl AiModule for MyModule {
                     game.enemy()
                         .map(|e| e.get_name())
                         .unwrap_or_else(|| {
-                            eprintln!("No enemy found");
+                            error!("No enemy found!");
                             "".to_string()
                         })
                         .as_ref(),
                     game.map_name().as_str(),
                 );
-                eprintln!("WP of {}: {}", s.name, wp);
+                // eprintln!("WP of {}: {}", s.name, wp);
                 OrderedFloat(wp)
             })
             .expect("More than 0 strategies should be available")
             .into();
-        eprintln!("Selected strategy: {}", self.strat.name);
+        info!("Selected strategy: {}", self.strat.name);
         // for x in 0..50 {
         //     for y in 0..50 {
         //         cvis().draw_text(
@@ -799,8 +861,12 @@ impl AiModule for MyModule {
         // // out.write_object_end();
         // encoder.finish().unwrap();
         println!(
-            "Times in microseconds:\n{}",
+            "Times (RSBWAPI) in microseconds:\n{}",
             serde_yaml::to_string(game.get_metrics()).unwrap()
+        );
+        println!(
+            "Times (Bot) in microseconds:\n{}",
+            serde_yaml::to_string(&*global_metric).unwrap()
         );
     }
 
@@ -808,6 +874,7 @@ impl AiModule for MyModule {
         self.units.mark_dead(&unit);
     }
 
+    #[measure([ResponseTime])]
     fn on_frame(&mut self, game: &Game) {
         CVIS.lock().unwrap().set_frame(game.get_frame_count());
         // self.cvis.draw_text(20, 20, "test".to_owned());
@@ -822,7 +889,7 @@ impl AiModule for MyModule {
             self.players.update(&self.game);
             self.units.update(&self.game, &self.players);
             self.grids.update(&self.units);
-            self.bases.update(&self.game);
+            self.bases.update(&self.game, &self.units);
             self.skirmishes = Skirmishes::new(self, &self.units.clusters);
             self.tracker.unrealized.clear();
             self.tracker.available_units = self
@@ -867,7 +934,7 @@ impl AiModule for MyModule {
 
             // Unstick
             for u in &self.units.my_completed {
-                u.unstick();
+                u.unstick().ok();
             }
 
             for s in self.skirmishes.skirmishes.iter() {
@@ -914,7 +981,7 @@ impl AiModule for MyModule {
                 }
             }
 
-            self.strat.clone().tick(self);
+            self.strat.clone().tick(self).ok();
 
             // Always gather minerals with the remaining drones, can't imagine a situation where
             // this is a bad idea...
@@ -935,6 +1002,9 @@ impl AiModule for MyModule {
 #[cfg(not(test))]
 fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");
+    #[cfg(debug_assertions)]
+    simplelog::SimpleLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())
+        .unwrap();
     // let guard = pprof::ProfilerGuardBuilder::default()
     //     .frequency(1000)
     //     .blocklist(&["libc", "libgcc", "pthread", "vdso"])

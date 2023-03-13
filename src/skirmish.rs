@@ -1,8 +1,10 @@
 use crate::cherry_vis::*;
 use crate::cluster::*;
 use crate::combat_sim::*;
+use crate::global_metric;
 use crate::is_attacker;
 use crate::{MyModule, SUnit};
+use metered::{metered, ResponseTime};
 use rsbwapi::{Position, UnitType};
 use std::rc::Rc;
 
@@ -46,7 +48,9 @@ impl SimResult {
     }
 }
 
+#[metered::metered(registry = SkirmishesMetrics, visibility = pub, registry_expr = global_metric.skirmishes_metrics)]
 impl Skirmishes {
+    // #[measure([ResponseTime])]
     pub fn new(module: &MyModule, clusters: &[Rc<Cluster>]) -> Skirmishes {
         let mut situation = 0;
         let mut skirmishes = Vec::with_capacity(clusters.len());
@@ -94,12 +98,10 @@ impl Skirmishes {
             };
             let mut sim_flee = Simulator {
                 player_a: Player {
-                    agents: sim_attack
-                        .player_a
-                        .agents
-                        .iter()
-                        .map(|a| a.clone().with_speed_factor(0.8))
-                        .collect(),
+                    // TODO Simulate slower units, but fix combat sim to slow down units with
+                    // Attacker as well. Otherwise attackers might decide to flee with 100% speed
+                    // and the result is ... wrong
+                    agents: sim_attack.player_a.agents.clone(),
                     script: Retreater,
                 },
                 player_b: sim_attack.player_b.clone(),

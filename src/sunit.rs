@@ -1,10 +1,12 @@
 use crate::cherry_vis::CherryVisOutput;
 use crate::cluster::{dbscan, Cluster, WithPosition};
+use crate::global_metric;
 use crate::splayer::*;
 use crate::MyModule;
 use crate::SupplyCounter;
 use crate::CVIS;
 use ahash::AHashMap;
+use metered::{metered, ResponseTime};
 use rsbwapi::*;
 use rstar::{Envelope, RTree, RTreeObject, AABB};
 use std::any::type_name;
@@ -43,6 +45,7 @@ pub fn stop_frames(unit_type: UnitType) -> i32 {
     }
 }
 
+#[metered::metered(registry = UnitsMetrics, visibility = pub, registry_expr = global_metric.units_metrics)]
 impl Units {
     pub fn new(game: &Game, players: &Players) -> Self {
         let mut result = Units::default();
@@ -54,6 +57,7 @@ impl Units {
         self.all.values()
     }
 
+    // #[measure([ResponseTime])]
     pub fn update(&mut self, game: &Game, players: &Players) {
         for u in self.all.values() {
             let mut inner = u.inner.borrow_mut();
@@ -67,13 +71,12 @@ impl Units {
             !inner.missing || inner.type_.is_flying_building() || !inner.type_.is_building()
         });
         for u in game.get_all_units() {
-            let new_unit_info = UnitInfo::new(game, &u);
             let unit = self
                 .all
                 .entry(u.get_id())
                 .or_insert_with(|| {
                     CVIS.lock().unwrap().unit_first_seen(&u);
-                    SUnit::new(new_unit_info, game, u)
+                    SUnit::new(UnitInfo::new(game, &u), game, u)
                 })
                 .clone();
 
@@ -81,6 +84,16 @@ impl Units {
             let mut inner = unit.inner.borrow_mut();
             if old.pending_goal.valid_until >= game.get_frame_count() {
                 inner.pending_goal = old.pending_goal;
+            }
+            if inner.order == Order::MiningMinerals
+                || inner.type_.is_mineral_field() && inner.being_gathered
+            {
+                inner.mining_frames = old.mining_frames + 1;
+            }
+            if !inner.detected {
+                inner.hit_points = old.hit_points;
+                inner.shields = old.shields;
+                inner.energy = old.shields;
             }
             if !inner.is_moving
                 && inner
@@ -251,15 +264,15 @@ impl SUnit {
         self.inner.borrow().type_
     }
 
-    pub fn unstick(&self) {
+    pub fn unstick(&self) -> BwResult<bool> {
         let mut inner = self.inner.borrow_mut();
         if !inner.type_.can_move() || inner.stuck_frames < 8 {
-            return;
+            return Ok(true);
         }
         dbg!("Unsticking", self.unit.get_id(), self.unit.get_type());
         inner.stuck_frames = 0;
         drop(inner);
-        self.stop();
+        self.stop()
     }
 
     pub fn idle(&self) -> bool {
@@ -342,6 +355,10 @@ impl SUnit {
         self.inner.borrow().is_being_healed
     }
 
+    pub fn cloaked(&self) -> bool {
+        self.inner.borrow().cloaked
+    }
+
     pub fn detected(&self) -> bool {
         self.inner.borrow().detected
     }
@@ -392,6 +409,11 @@ impl SUnit {
 
     pub fn build_type(&self) -> UnitType {
         self.inner.borrow().build_type()
+    }
+
+    pub fn remaining_mining_frames(&self) -> i32 {
+        // According to https://liquipedia.net/starcraft/Mining - a worker mines from 80 frames
+        80_i32.saturating_sub(self.inner.borrow().mining_frames)
     }
 
     pub fn future_type(&self) -> UnitType {
@@ -590,6 +612,10 @@ impl SUnit {
 
     pub fn get_order(&self) -> Order {
         self.inner.borrow().order
+    }
+
+    pub fn get_secondary_order(&self) -> Order {
+        self.inner.borrow().secondary_order
     }
 
     pub fn plagued(&self) -> bool {
@@ -841,6 +867,7 @@ pub struct UnitInfo {
     pub missing: bool,
     pub exists: bool,
     pub is_being_healed: bool,
+    pub cloaked: bool,
     pub detected: bool,
     pub is_stasised: bool,
     pub is_under_dark_swarm: bool,
@@ -851,6 +878,7 @@ pub struct UnitInfo {
     pub is_moving: bool,
     pub is_sieged: bool,
     pub order: Order,
+    pub secondary_order: Order,
     pub is_braking: bool,
     pub order_target_position: Option<Position>,
     pending_goal: Pending,
@@ -864,6 +892,7 @@ pub struct UnitInfo {
     pub lockdown_timer: i32,
     pub ensnare_timer: i32,
     pub stuck_frames: i32,
+    pub mining_frames: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -882,10 +911,12 @@ impl UnitInfo {
             .get_ground_weapon_cooldown()
             .max(unit.get_air_weapon_cooldown());
         let player = unit.get_player();
+        let detected = unit.is_detected();
+        let unit_type = unit.get_type();
         Self {
             id: unit.get_id(),
             missing: false,
-            type_: unit.get_type(),
+            type_: unit_type,
             build_type: unit.get_build_type(),
             tile_position: unit.get_tile_position(),
             position: unit.get_position(),
@@ -913,33 +944,44 @@ impl UnitInfo {
             is_powered: unit.is_powered(),
             // TODO What if it's a Bunker?
             ground_weapon: Weapon {
-                min_range: unit.get_type().ground_weapon().min_range(),
-                max_range: player.weapon_max_range(unit.get_type().ground_weapon()),
-                max_hits: unit.get_type().max_ground_hits(),
+                min_range: unit_type.ground_weapon().min_range(),
+                max_range: player.weapon_max_range(unit_type.ground_weapon()),
+                max_hits: unit_type.max_ground_hits(),
                 cooldown: unit.get_ground_weapon_cooldown(),
-                weapon_type: unit.get_type().ground_weapon(),
-                damage: player.damage(unit.get_type().ground_weapon())
-                    * unit.get_type().max_ground_hits(),
+                weapon_type: unit_type.ground_weapon(),
+                damage: player.damage(unit_type.ground_weapon()) * unit_type.max_ground_hits(),
             },
             // TODO What if it's a Bunker?
             air_weapon: Weapon {
-                min_range: unit.get_type().air_weapon().min_range(),
-                max_range: player.weapon_max_range(unit.get_type().air_weapon()),
-                max_hits: unit.get_type().max_air_hits(),
+                min_range: unit_type.air_weapon().min_range(),
+                max_range: player.weapon_max_range(unit_type.air_weapon()),
+                max_hits: unit_type.max_air_hits(),
                 cooldown: unit.get_air_weapon_cooldown(),
-                weapon_type: unit.get_type().air_weapon(),
-                damage: player.damage(unit.get_type().air_weapon())
-                    * unit.get_type().max_air_hits(),
+                weapon_type: unit_type.air_weapon(),
+                damage: player.damage(unit_type.air_weapon()) * unit_type.max_air_hits(),
             },
-            armor: player.armor(unit.get_type()),
+            armor: player.armor(unit_type),
             player: player.into(),
             is_flying: unit.is_flying(),
-            hit_points: unit.get_hit_points(),
-            energy: unit.get_energy(),
-            shields: unit.get_shields(),
+            hit_points: if detected {
+                unit.get_hit_points()
+            } else {
+                unit_type.max_hit_points()
+            },
+            energy: if detected {
+                unit.get_energy()
+            } else {
+                unit_type.max_energy()
+            },
+            shields: if detected {
+                unit.get_shields()
+            } else {
+                unit_type.max_shields()
+            },
             exists: unit.exists(),
             is_being_healed: unit.is_being_healed(),
-            detected: unit.is_detected(),
+            cloaked: unit.is_cloaked(),
+            detected,
             is_stasised: unit.is_stasised(),
             is_under_dark_swarm: unit.is_under_dark_swarm(),
             is_under_disruption_web: unit.is_under_disruption_web(),
@@ -949,6 +991,7 @@ impl UnitInfo {
             is_moving: unit.is_moving(),
             is_sieged: unit.is_sieged(),
             order: unit.get_order(),
+            secondary_order: unit.get_secondary_order(),
             is_braking: unit.is_braking(),
             last_command_frame: unit.last_command_frame(),
             order_target_position: unit.get_order_target_position(),
@@ -966,6 +1009,7 @@ impl UnitInfo {
             lockdown_timer: unit.get_lockdown_timer(),
             ensnare_timer: unit.get_ensnare_timer(),
             stuck_frames: 0,
+            mining_frames: 0,
         }
     }
 

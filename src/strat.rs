@@ -16,8 +16,8 @@ pub fn save_strategies(records: &[StrategyRecord]) -> anyhow::Result<()> {
     serde_json::to_writer(
         File::create(Path::new("bwapi-data").join("write").join("learned.json"))?,
         &records,
-    );
-    Ok(())
+    )
+    .map_err(anyhow::Error::new)
 }
 
 pub fn load_strategies() -> anyhow::Result<Vec<StrategyRecord>> {

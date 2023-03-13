@@ -147,6 +147,18 @@ pub struct Agent {
     pub id: usize,
 }
 
+impl std::fmt::Debug for Agent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.debug_struct("Agent")
+            .field("x", &self.x)
+            .field("y", &self.y)
+            .field("health", &self.health())
+            .field("shields", &self.shields())
+            .field("unit_type", &self.unit_type)
+            .finish()
+    }
+}
+
 impl Agent {
     pub fn from_unit(unit: &SUnit) -> Self {
         let unit_type = unit.get_type();
@@ -154,7 +166,11 @@ impl Agent {
         let air_weapon = unit.get_air_weapon();
         let splayer = &unit.player();
         let player = &splayer.player;
-        let detected = unit.detected();
+        // let detected = unit.detected();
+        let detected = unit.detected() || !unit.visible();
+        if unit.cloaked() && !unit.detected() {
+            eprintln!("{}", unit.hit_points());
+        }
         // TODO SUnit should have the correct values already!
         let base = Self::from_unit_type(
             unit_type,
@@ -173,7 +189,7 @@ impl Agent {
             x: unit.position().x,
             y: unit.position().y,
             cooldown: unit.cooldown(),
-            detected,
+            detected: unit.detected() || !unit.cloaked(),
             burrowed: unit.burrowed(),
             stasis_timer: unit.stasis_timer(),
             sleep_timer: base.sleep_timer.max(
@@ -344,6 +360,13 @@ impl Agent {
 
     pub fn with_x(self, x: i32) -> Agent {
         Self { x, ..self }
+    }
+
+    pub fn undetected(self) -> Agent {
+        Self {
+            detected: false,
+            ..self
+        }
     }
 
     pub fn with_target_priority(self, attack_target_priority: TargetingPriority) -> Agent {
@@ -525,6 +548,7 @@ trait Script {
         -> bool;
 }
 
+#[derive(Debug)]
 struct Suicider;
 
 impl Script for Suicider {
@@ -719,7 +743,7 @@ impl Script for Healer {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Retreater;
 
 impl Script for Retreater {
@@ -729,64 +753,63 @@ impl Script for Retreater {
         allies: &mut [Agent],
         enemies: &mut [Agent],
     ) -> bool {
-        let mut selected_enemy: Option<usize> = None;
-        let mut selected_distance_squared: i32 = std::i32::MAX;
         let agent = &mut allies[agent_index];
-        if agent.speed == 0.0 {
-            return Attacker {}.simulate(agent_index, allies, enemies);
-        }
-        let mut selected_weapon = &agent.ground_weapon;
+        // TODO simulate potshots
+        // let mut selected_enemy: Option<usize> = None;
+        // let mut selected_distance_squared: i32 = std::i32::MAX;
+        // if agent.speed == 0.0 {
+        //     return Attacker {}.simulate(agent_index, allies, enemies);
+        // }
+        // let mut selected_weapon = &agent.ground_weapon;
 
-        if let Some(target_index) = agent.attack_target {
-            let enemy = &enemies[target_index];
-            if enemy.health > 0 {
-                let distance_squared = distance_squared(agent, enemy);
-                selected_weapon = enemy.weapon_vs(agent);
-                if distance_squared >= selected_weapon.min_range_squared
-                    && distance_squared <= selected_weapon.max_range_squared
-                {
-                    selected_enemy = Some(target_index);
-                    selected_distance_squared = distance_squared;
-                }
-            }
-        }
+        // if let Some(target_index) = agent.attack_target {
+        //     let enemy = &enemies[target_index];
+        //     if enemy.health > 0 {
+        //         let distance_squared = distance_squared(agent, enemy);
+        //         selected_weapon = enemy.weapon_vs(agent);
+        //         if distance_squared >= selected_weapon.min_range_squared
+        //             && distance_squared <= selected_weapon.max_range_squared
+        //         {
+        //             selected_enemy = Some(target_index);
+        //             selected_distance_squared = distance_squared;
+        //         }
+        //     }
+        // }
 
-        if selected_enemy.is_none() {
-            for (i, enemy) in enemies
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.health > 0 && e.detected && !e.is_stasised())
-            {
-                let weapon = enemy.weapon_vs(agent);
-                if weapon.damage == 0 {
-                    continue;
-                }
-                let distance_squared = distance_squared(agent, enemy);
-                if distance_squared >= weapon.min_range_squared
-                    && distance_squared < selected_distance_squared
-                {
-                    selected_distance_squared = distance_squared;
-                    selected_enemy = Some(i);
-                    selected_weapon = weapon;
+        // if selected_enemy.is_none() {
+        //     for (i, enemy) in enemies
+        //         .iter()
+        //         .enumerate()
+        //         .filter(|(_, e)| e.health > 0 && e.detected && !e.is_stasised())
+        //     {
+        //         let weapon = enemy.weapon_vs(agent);
+        //         if weapon.damage == 0 {
+        //             continue;
+        //         }
+        //         let distance_squared = distance_squared(agent, enemy);
+        //         if distance_squared >= weapon.min_range_squared
+        //             && distance_squared < selected_distance_squared
+        //         {
+        //             selected_distance_squared = distance_squared;
+        //             selected_enemy = Some(i);
+        //             selected_weapon = weapon;
 
-                    // If it can hit us "now", we stop searching
-                    if selected_distance_squared <= weapon.max_range_squared
-                        && enemy.attack_target_priority == TargetingPriority::Highest
-                    {
-                        break;
-                    }
-                }
-            }
-        }
+        //             // If it can hit us "now", we stop searching
+        //             if selected_distance_squared <= weapon.max_range_squared
+        //                 && enemy.attack_target_priority == TargetingPriority::Highest
+        //             {
+        //                 selected_enemy = None;
+        //                 break;
+        //             }
+        //         }
+        //     }
+        // }
 
-        if selected_enemy.is_none() {
-            return false;
-        }
         return flee(agent, enemies);
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct Attacker {}
 
 impl Attacker {
@@ -874,7 +897,7 @@ impl Script for Attacker {
             return flee(agent, enemies);
         }
         let selected_enemy = selected_enemy.unwrap();
-        assert!(enemies[selected_enemy].unit_type != UnitType::Protoss_Dark_Templar);
+        // eprintln!("Enemy for {:?}: {:?}", agent, enemies[selected_enemy]);
 
         if selected_distance_squared <= weapon.max_range_squared {
             if agent.burrowed_attacker != agent.burrowed {
@@ -1215,7 +1238,16 @@ pub struct Simulator<A, B, W> {
     pub walkability: W,
 }
 
-#[derive(Default, Clone)]
+impl<A: std::fmt::Debug, B: std::fmt::Debug, W> std::fmt::Debug for Simulator<A, B, W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.debug_struct("Simulator")
+            .field("player_a", &self.player_a)
+            .field("player_b", &self.player_b)
+            .finish()
+    }
+}
+
+#[derive(Default, Clone, Debug)]
 pub struct Player<S> {
     pub agents: Vec<Agent>,
     pub script: S,
@@ -1679,6 +1711,54 @@ mod test {
 
         assert_eq!(
             simulator
+                .player_a
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            20
+        );
+        assert_eq!(
+            simulator
+                .player_b
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn dts_vs_fleeing_hydras() {
+        let hydra = Agent::from(UnitType::Zerg_Hydralisk)
+            .with_x(32)
+            .with_speed_factor(0.8);
+        let mut simulator = Simulator {
+            player_a: Player {
+                agents: vec![hydra; 20],
+                script: Retreater,
+            },
+            player_b: Player {
+                agents: vec![Agent::from(UnitType::Protoss_Dark_Templar)],
+                script: Attacker::new(),
+            },
+            walkability: |x, y| true,
+        };
+
+        let frames = simulator.simulate_for(8 * 24);
+
+        assert_eq!(
+            simulator
+                .player_a
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            19
+        );
+        assert_eq!(
+            simulator
                 .player_b
                 .agents
                 .iter()
@@ -1817,6 +1897,48 @@ mod test {
                 .filter(|u| u.is_alive)
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn hydra_vs_cannons() {
+        let hydra = Agent::from(UnitType::Zerg_Hydralisk)
+            .with_x(130 * 8)
+            .with_y(430 * 8);
+        let cannon = Agent::from(UnitType::Protoss_Photon_Cannon)
+            .with_x(90 * 8)
+            .with_y(440 * 8);
+        let mut simulator = Simulator {
+            player_a: Player {
+                agents: vec![hydra; 10],
+                script: Attacker::new(),
+            },
+            player_b: Player {
+                agents: vec![cannon; 5],
+                script: Attacker::new(),
+            },
+            walkability: |x, y| !(100 * 8..110 * 8).contains(&x),
+        };
+
+        let frames = simulator.simulate_for(8 * 24);
+
+        assert_eq!(
+            simulator
+                .player_b
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            4
+        );
+        assert_eq!(
+            simulator
+                .player_a
+                .agents
+                .iter()
+                .filter(|u| u.is_alive)
+                .count(),
+            4
         );
     }
 }

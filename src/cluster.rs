@@ -1,5 +1,7 @@
+use crate::global_metric;
 use crate::sunit::SUnit;
 use ahash::*;
+use metered::measure;
 use rsbwapi::Position;
 use rstar::{RTree, RTreeObject, AABB};
 
@@ -10,17 +12,19 @@ pub trait WithPosition {
 }
 
 pub fn dbscan(elements: &RTree<SUnit>, eps: i32, min_pts: usize) -> Vec<Cluster> {
-    for x in elements.iter() {
-        let dim = x.dimensions();
-        assert!(dim.tl.x >= 0 && dim.br.x >= 0);
-        assert!(dim.tl.y >= 0 && dim.br.y >= 0);
-        assert!(dim.br.x > dim.tl.x);
-        assert!(dim.br.y > dim.tl.y);
-        assert!(dim.br.x - dim.tl.x < 164);
-        assert!(dim.br.y - dim.tl.y < 164);
-    }
-    let (labeled, max_cluster) = label_items(elements, eps, min_pts);
-    post_process_clusters(labeled, max_cluster)
+    measure!(&global_metric.dbscan, {
+        for x in elements.iter() {
+            let dim = x.dimensions();
+            assert!(dim.tl.x >= 0 && dim.br.x >= 0);
+            assert!(dim.tl.y >= 0 && dim.br.y >= 0);
+            assert!(dim.br.x > dim.tl.x);
+            assert!(dim.br.y > dim.tl.y);
+            assert!(dim.br.x - dim.tl.x < 164);
+            assert!(dim.br.y - dim.tl.y < 164);
+        }
+        let (labeled, max_cluster) = label_items(elements, eps, min_pts);
+        post_process_clusters(labeled, max_cluster)
+    })
 }
 
 fn label_items<

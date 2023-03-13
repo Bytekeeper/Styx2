@@ -152,7 +152,9 @@ impl MyModule {
                         Some(repair_target)
                             if target.repairing()
                                 && repair_target.get_type() == UnitType::Terran_Bunker
-                                && repair_target.get_ground_weapon().max_range > 128 =>
+                                && repair_target.player().get_upgrade_level(
+                                    UnitType::Terran_Marine.ground_weapon().upgrade_type(),
+                                ) > 0 =>
                         {
                             13
                         }

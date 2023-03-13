@@ -144,6 +144,7 @@ impl MyModule {
     }
     pub fn ensure_base_count(&mut self, amount: usize) -> Result<(), FailureReason> {
         let current_base_count = self.pending_or_ready_base_locations().len();
+        cvis().log(|| format!("Base Count {} vs Wanted {}", current_base_count, amount));
         for _ in 0..amount.saturating_sub(current_base_count) {
             self.start_expansion()?;
         }
@@ -162,16 +163,10 @@ impl MyModule {
             .position();
 
         // TODO What if there is no base? We should just pick any spot or give up
-        let bases = self.pending_or_ready_base_locations();
         let location = self
-            .map
             .bases
-            .iter()
-            .filter(|candidate| {
-                !bases
-                    .iter()
-                    .any(|base| base.distance_squared(candidate.position) < 49)
-            })
+            .all()
+            .filter(|candidate| candidate.resource_depot.is_none())
             .min_by_key(|b| self.map.get_path(b.position.center(), base).1)
             .expect("Expansion location to exist");
         let pos = location.position;
@@ -230,10 +225,11 @@ impl MyModule {
                     .ok_or(FailureReason::misc("No builder found"))?;
 
                 self.tracker.reserve_unit(builder);
-                builder.morph(param.unit_type);
+                builder.morph(param.unit_type).ok();
             }
             return Ok(());
         }
+        let tile_size = param.unit_type.tile_size();
 
         // https://liquipedia.net/starcraft/Mining ~180 frames per trip
         let dist_fn = |u: &SUnit, target: TilePosition| if u.carrying() { 180 } else { 0 } + self.map.get_path(u.target_position().unwrap_or(u.position()), target.center()).1;
@@ -252,8 +248,9 @@ impl MyModule {
                 })
                 .ok_or(FailureReason::misc("No vespene geyser found"))??
         } else {
-            Rectangle::<TilePosition>::new(base - (7, 7), base + (7, 7))
+            let mut candidates = Spiral { center: base }
                 .into_iter()
+                .take(300)
                 .map(|p| {
                     builders
                         .iter()
@@ -263,23 +260,22 @@ impl MyModule {
                 })
                 .flatten()
                 .filter(|(b, p)| {
+                    let center = p.to_position() + tile_size.to_position() / 2;
                     self.game
                         .can_build_here(&b.unit, *p, param.unit_type, false)
                         .unwrap_or(false)
                         && !self
                             .units
-                            .all_in_radius(p.center(), 96)
+                            .all_in_radius(center, 128)
                             .any(|it| it.get_type().is_resource_container())
                         && !self
                             .units
-                            .all_in_radius(p.center(), 108)
+                            .all_in_radius(center, 128)
                             .any(|it| it.get_type().is_resource_depot())
-                })
-                .min_by_key(|(_, p)| match param.at {
-                    At::TilePosition(at) => p.distance_squared(at),
-                    At::Anywhere => p.distance_squared(base),
-                    At::DefenseChoke => self
-                        .map
+                });
+            let result = if matches!(param.at, At::DefenseChoke) {
+                candidates.min_by_key(|(_, p)| {
+                    self.map
                         .choke_points
                         .iter()
                         .map(|cp| {
@@ -287,17 +283,21 @@ impl MyModule {
                             p.distance_squared(cp.top.to_tile_position())
                         })
                         .min()
-                        .unwrap(),
+                        .unwrap()
                 })
-                .ok_or(FailureReason::misc("No build location found"))?
+            } else {
+                candidates.next()
+            };
+            result.ok_or_else(|| {
+                FailureReason::misc(format!("No build location found near {}", base))
+            })?
         };
         let dim = Position::new(
             param.unit_type.dimension_left() + param.unit_type.dimension_right() + 1,
             param.unit_type.dimension_up() + param.unit_type.dimension_down() + 1,
         );
 
-        let build_pos =
-            build_tile_pos.to_position() + param.unit_type.tile_size().to_position() / 2;
+        let build_pos = build_tile_pos.to_position() + tile_size.to_position() / 2;
         // Account for some worker wiggling
         let frames_to_start_build = self.estimate_frames_to(&builder, build_pos) + 24;
         let future_gms = available_gms + self.estimate_gms(frames_to_start_build, 1);
@@ -383,5 +383,61 @@ impl MyModule {
                 .map_err(FailureReason::Bwapi)?;
         }
         Ok(())
+    }
+}
+
+pub struct Spiral<T> {
+    center: T,
+}
+
+pub struct SpiralIterator<T> {
+    center: T,
+    delta: T,
+}
+
+impl<const N: i32> std::iter::IntoIterator for Spiral<ScaledPosition<N>> {
+    type Item = ScaledPosition<N>;
+    type IntoIter = SpiralIterator<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        SpiralIterator {
+            center: self.center,
+            delta: ScaledPosition::<N>::new(0, 0),
+        }
+    }
+}
+
+impl<const N: i32> std::iter::Iterator for SpiralIterator<ScaledPosition<N>> {
+    type Item = ScaledPosition<N>;
+
+    fn next(&mut self) -> std::option::Option<Self::Item> {
+        let result = self.center + self.delta;
+        if self.delta.x.abs() <= self.delta.y.abs()
+            && (self.delta.x != self.delta.y || self.delta.x > 0)
+        {
+            self.delta.x += if self.delta.y >= 0 { 1 } else { -1 };
+        } else {
+            self.delta.y += if self.delta.x >= 0 { -1 } else { 1 };
+        }
+        Some(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spiral_test() {
+        let ten: Vec<_> = Spiral {
+            center: Position::new(0, 0),
+        }
+        .into_iter()
+        .take(30)
+        .collect();
+        assert_eq!(
+            ten.iter().collect::<std::collections::HashSet<_>>().len(),
+            ten.len()
+        );
     }
 }

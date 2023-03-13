@@ -7,6 +7,7 @@ use ordered_float::OrderedFloat;
 use rsbwapi::sma::Altitude;
 use rsbwapi::{Position, Rectangle};
 
+#[must_use]
 #[derive(Debug)]
 pub struct WeightedPosition {
     pub weight: f32,
@@ -21,18 +22,25 @@ impl WeightedPosition {
 }
 
 impl MyModule {
-    pub fn positioning(&self, unit: &SUnit, requests: &[WeightedPosition]) -> Position {
+    pub fn positioning(&self, unit: &SUnit, requests: &[WeightedPosition]) -> Option<Position> {
         let mut aggregated_position = Vec2::ZERO;
         let mut aggregated_weight = 0.0;
         for &WeightedPosition { weight, position } in requests {
             aggregated_weight += weight;
-            aggregated_position +=
-                position.clamp_length_max(12.0 * unit.top_speed() as f32) * weight;
+            aggregated_position += position * weight;
+        }
+        if DRAW_FORCE_VECTORS {
+            cvis().draw_text(
+                unit.position().x,
+                unit.position().y,
+                format!("{:.2} {}", aggregated_weight, aggregated_position),
+            );
         }
         if aggregated_weight < 0.0001 {
-            return unit.position();
+            return Some(unit.position());
         }
         aggregated_position /= aggregated_weight;
+        aggregated_position = aggregated_position.clamp_length_max(unit.top_speed() as f32 * 11.0);
         // dbg!(aggregated_position, aggregated_weight);
 
         // If we somehow end up "not moving at all" - use the largest weighted position (TODO Probably
@@ -73,21 +81,30 @@ impl MyModule {
             })
             .unwrap_or(unit.position())
         };
-        cvis().draw_line(
-            target_position.x,
-            target_position.y,
-            result.x,
-            result.y,
-            rsbwapi::Color::Purple,
-        );
-        cvis().draw_line(
-            unit.position().x,
-            unit.position().y,
-            result.x,
-            result.y,
-            rsbwapi::Color::Green,
-        );
-        result
+        if DRAW_FORCE_VECTORS {
+            cvis().draw_line(
+                target_position.x,
+                target_position.y,
+                unit.position().x,
+                unit.position().y,
+                rsbwapi::Color::Blue,
+            );
+            cvis().draw_line(
+                unit.position().x,
+                unit.position().y,
+                result.x,
+                result.y,
+                rsbwapi::Color::Green,
+            );
+            cvis().draw_circle(result.x, result.y, 8, rsbwapi::Color::Green);
+        }
+        if result.distance_squared(unit.position()) > 16 * 16
+            || result.distance_squared(target_position) < 8 * 8
+        {
+            Some(result)
+        } else {
+            None
+        }
     }
 }
 
@@ -242,16 +259,25 @@ pub fn follow_path(
         }
     } else {
         let path = module.map.get_path(unit.position(), target);
-        let path = path.0;
-        let (a, b) = match (path.get(0), path.get(1)) {
-            (None, None) => (target, target),
-            (Some(a), None) => (a.top.center(), target),
-            (Some(a), Some(b)) => (a.top.center(), b.top.center()),
-            _ => unreachable!(),
-        };
+        let mut path_iter = path.0.iter();
+        let selected_cp = path
+            .0
+            .iter()
+            .map(|cp| cp.top.center())
+            .filter(|pos| pos.distance(unit.position()) >= 63.0)
+            .next()
+            .unwrap_or(target)
+            .to_walk_position();
+        let mut target_position = pos.to_walk_position();
+        let min_alt = (7 + unit.get_type().width().max(unit.get_type().height())) as i16 / 8;
+        for _ in 0..8 {
+            let Some(next) = module.altitude_path_next(target_position, selected_cp, min_alt) else { return WeightedPosition::ZERO };
+            target_position = next;
+        }
+
         WeightedPosition {
             weight,
-            position: pos_to_vec2(a) * 0.90 + pos_to_vec2(b) * 0.1 - pos_to_vec2(pos),
+            position: pos_to_vec2(target_position.center() - pos),
         }
     };
     if DRAW_FORCE_VECTORS {
@@ -264,7 +290,7 @@ pub fn follow_path(
             unit.position().y,
             t.x,
             t.y,
-            rsbwapi::Color::Brown,
+            rsbwapi::Color::Cyan,
         );
     }
     result

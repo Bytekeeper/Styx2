@@ -12,6 +12,19 @@ impl TrainParam {
 }
 
 impl MyModule {
+    pub fn ensure_ratio(
+        &mut self,
+        a: (UnitType, usize),
+        b: (UnitType, usize),
+    ) -> Result<(), FailureReason> {
+        assert!(a.1 > 0);
+        assert!(b.1 > 0);
+        let amount_a = self.count_pending_or_ready(|ut| ut == b.0) * a.1 / b.1;
+        let amount_b = self.count_pending_or_ready(|ut| ut == a.0) * b.1 / a.1;
+        self.ensure_unit_count(a.0, amount_a)?;
+        self.ensure_unit_count(b.0, amount_b)
+    }
+
     // 2 Lings count as one unit here!
     pub fn ensure_unit_count(
         &mut self,

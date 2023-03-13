@@ -130,21 +130,28 @@ impl MyModule {
         }
         miners.retain(|w| {
             if matches!(w.get_order(), Order::MiningMinerals) {
-                let Some(mineral_index) = minerals
-                        .iter()
-                        .position(|m| Some(*m) == w.get_order_target().as_ref())
-                    else {
-                        cvis().log(|| "Worker target mineral not found");
-                        return true;
-                    };
-                let mineral = minerals.swap_remove(mineral_index);
-                cvis().draw_line(
-                    w.position().x,
-                    w.position().y,
-                    mineral.position().x,
-                    mineral.position().y,
-                    Color::Green,
-                );
+                // let Some(mineral_index) = minerals
+                //         .iter()
+                //         .position(|m| Some(*m) == w.get_order_target().as_ref())
+                //     else {
+                //         cvis().log(|| "Worker target mineral not found");
+                //         return true;
+                //     };
+                // let mineral = minerals.swap_remove(mineral_index);
+                // if DRAW_GATHERING_TARGET {
+                //     cvis().draw_line(
+                //         w.position().x,
+                //         w.position().y,
+                //         mineral.position().x,
+                //         mineral.position().y,
+                //         Color::Green,
+                //     );
+                //     // cvis().draw_text(
+                //     //     w.position().x,
+                //     //     w.position().y,
+                //     //     format!("O:{:?}/{:?}", w.get_order(), w.get_secondary_order()),
+                //     // );
+                // }
                 return false;
             } else if w.get_order() == Order::ReturnMinerals {
                 return false;
@@ -165,11 +172,11 @@ impl MyModule {
                                 j,
                                 m,
                                 self.estimate_frames_to(u, m.position())
-                                    + if m.being_gathered() { 90 } else { 0 }
+                                    + m.remaining_mining_frames()
                                     + if u.get_order_target().as_ref() == Some(m) {
                                         0
                                     } else {
-                                        45
+                                        12
                                     },
                             )
                         })
@@ -178,13 +185,20 @@ impl MyModule {
                 })
                 .min_by_key(|(.., d)| *d);
             if let Some((i, w, j, m, _)) = miner_mineral {
-                cvis().draw_line(
-                    w.position().x,
-                    w.position().y,
-                    m.position().x,
-                    m.position().y,
-                    Color::Green,
-                );
+                if DRAW_GATHERING_TARGET {
+                    cvis().draw_line(
+                        w.position().x,
+                        w.position().y,
+                        m.position().x,
+                        m.position().y,
+                        Color::Green,
+                    );
+                    // cvis().draw_text(
+                    //     w.position().x,
+                    //     w.position().y,
+                    //     format!("O:{:?}/{:?}", w.get_order(), w.get_secondary_order()),
+                    // );
+                }
                 w.gather(m).ok();
                 miners.swap_remove(i);
                 // We might want multiple workers on one mineral

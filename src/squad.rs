@@ -130,7 +130,7 @@ impl Squad {
                     module.flee(unit, base);
                 }
             } else if unit.distance_to(*vanguard) > 256 || !unit.get_type().can_attack() {
-                unit.move_to(vanguard.position());
+                unit.move_to(vanguard.position()).ok();
             } else {
                 let target = module
                     .units
@@ -219,7 +219,7 @@ impl Squad {
                 //     Color::Black,
                 // );
                 cvis().log_unit_frame(&u, || format!("ATK POS {} S:{}", self.target, u.sleeping()));
-                u.attack_position(self.target);
+                u.attack_position(self.target).ok();
                 module.tracker.available_units.push(u);
             }
         }
