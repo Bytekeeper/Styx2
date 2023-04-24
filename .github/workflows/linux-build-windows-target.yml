@@ -16,10 +16,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Install windows target
+    - name: Install windows target and xwin
       run: |
+        cargo install xwin
+        rustup target add i686-pc-windows-msvc
         cargo install cross
-        rustup target add i686-pc-windows-gnu
+        xwin --accept-license splat --output /tmp/.xwin
     - uses: actions/checkout@v3
     - name: Build
       run: cross build --verbose --release
