@@ -16,6 +16,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    - name: Setup system
+      run: |
+        apt install llvm-dev libclang-dev clang
     - name: Install windows target and xwin
       run: |
         cargo install xwin
